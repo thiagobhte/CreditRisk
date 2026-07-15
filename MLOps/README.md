@@ -58,17 +58,29 @@ Os dados são montados por **bind-mount** de `Dados/` para `/data` dentro dos
 containers — basta ter os CSVs brutos em `Dados/raw_data/`.
 
 ```bash
-# 1. Airflow (orquestração com UI)  →  http://localhost:8080   (admin / admin)
-docker compose -f MLOps/docker-compose.yml up -d --build airflow
-
-# 2. API de predição                →  http://localhost:8000/docs
+# API de predição        →  http://localhost:8000/docs
 docker compose -f MLOps/docker-compose.yml up -d --build api
 
-# 3. Pipeline sem Airflow (job único)
+# Painel Streamlit (SHAP) →  http://localhost:8501
+docker compose -f MLOps/docker-compose.yml up -d --build streamlit
+
+# Airflow (orquestração)  →  http://localhost:8081   (admin / admin)
+docker compose -f MLOps/docker-compose.yml up -d --build airflow
+
+# Pipeline sem Airflow (job único)
 docker compose -f MLOps/docker-compose.yml run --rm pipeline
 
-# 4. Monitoramento de drift
+# Monitoramento de drift (job)
 docker compose -f MLOps/docker-compose.yml run --rm monitoring
+
+# Parar tudo
+docker compose -f MLOps/docker-compose.yml down
+```
+
+### Orquestração sem Docker
+```bash
+python -m MLOps.pipeline_orchestration                 # pipeline completo
+python -m MLOps.pipeline_orchestration --with-tuning   # incluindo tuning
 ```
 
 ### Se o build falhar por rede (ambiente corporativo)
@@ -116,7 +128,7 @@ sanitize  ──►  build_abt  ──►  train
 
 **Como demonstrar:**
 1. `docker compose -f MLOps/docker-compose.yml up -d --build airflow`
-2. Abra `http://localhost:8080` e faça login (**admin / admin**)
+2. Abra `http://localhost:8081` e faça login (**admin / admin**)
 3. Ative a DAG `credit_risk_pipeline` e clique em **Trigger**
 4. Acompanhe as tasks ficando verdes na aba *Graph*
 
