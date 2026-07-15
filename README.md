@@ -62,7 +62,7 @@ métrica-guia é o **AUC-ROC**, não a acurácia.
      performance sem vazamento (out-of-fold), **persiste o modelo** em `Model/artifacts/`
      e gera as predições e a importância das features.
 
-4. **Avaliação e análise** (notebooks) — provando que dá para confiar.
+4. **Avaliação e análise** (notebooks) — a hora de olhar o modelo com olhar crítico e responder, com números na mão, à pergunta que todo mundo faz: *"dá mesmo para confiar nele?"*.
    - `DataPipeline/exp_analysis.ipynb`: análise exploratória dos dados limpos.
    - `Model/evaluation.ipynb` e `evaluation_part2.ipynb`: performance do modelo (AUC por fold, ROC, calibração, importância).
    - `Model/kpi_analysis.ipynb`: traduz as predições em **R$** (inadimplência evitada, resultado líquido, corte ótimo).
@@ -148,7 +148,7 @@ pip install -r requirements.txt
 
 ## 🚀 Como treinar o modelo (do zero ao modelo salvo)
 
-> ⚠️ **Regra de ouro:** rode **sempre a partir da raiz do projeto** e com o modo
+> ⚠️ **Ponto de atenção:** rode **sempre a partir da raiz do projeto** e com o modo
 > módulo (`python -m ...`). O `config.py` está na raiz, e é assim que os imports funcionam.
 
 ### 1️⃣ Sanitizar os dados brutos
@@ -164,19 +164,19 @@ python -m DataPipeline.abt_transform
 Junta as 8 tabelas numa visão por cliente e gera o `Dados/abt.csv` — a entrada da
 modelagem (~3 min).
 
-### 3️⃣ (Opcional) Treinar o baseline
+### 3️⃣ Treinar o baseline
 ```bash
 python -m Model.baseline
 ```
 Roda a **Regressão Logística** de comparação. Guarde o AUC dela: é a régua que o
 LightGBM precisa superar.
 
-### 4️⃣ (Opcional) Otimizar hiperparâmetros
+### 4️⃣ Otimizar hiperparâmetros
 ```bash
 python -m Model.tune
 ```
 Usa o **Optuna** para procurar a melhor combinação e atualiza o `best_params.json`.
-(É a etapa mais longa — pule para usar os parâmetros já commitados.)
+É a etapa mais longa, mas é ela que garante os melhores hiperparâmetros para o treino final.
 
 ### 5️⃣ Treinar o modelo final
 ```bash
