@@ -20,8 +20,8 @@ Table)**, **modelagem** (baseline → tuning → treino final) e **avaliação**
 **deploy** do modelo como um serviço de predição com API, painel visual e
 orquestração via Airflow.
 
-A ideia não é só "treinar um modelo", mas conectar **negócio + dados + tecnologia +
-decisão** — do CSV bruto à decisão de crédito automatizada.
+O escopo não se limita ao treinamento do modelo: integra **negócio, dados, tecnologia
+e tomada de decisão**, cobrindo o fluxo do dado bruto à decisão de crédito automatizada.
 
 ---
 
@@ -34,42 +34,40 @@ pagar um empréstimo** (`TARGET = 1`). Isso permite que a instituição:
 - **preserve receita e inclusão** aprovando bons pagadores que seriam recusados por regras manuais;
 - **decida com transparência** — cada decisão vem acompanhada do *porquê* (explicabilidade), exigência de conformidade em crédito.
 
-O grande desafio do problema é o **desbalanceamento**: apenas **~8%** dos clientes
-são inadimplentes. Prever "todo mundo paga" acerta 92% — e é inútil. Por isso a
-métrica-guia é o **AUC-ROC**, não a acurácia.
+O principal desafio do problema é o **desbalanceamento**: apenas **~8%** dos clientes
+são inadimplentes. Nesse cenário a acurácia é enganosa (um modelo que aprova todos
+acerta 92% e não agrega valor), por isso a métrica-guia é o **AUC-ROC**.
 
 ---
 
-## 🧭 Metodologia (o passo a passo, em linguagem de gente)
+## 🧭 Metodologia
 
-1. **Sanitização** (`DataPipeline/data_sanitization.py`) — a "faxina" dos dados.
-   Lê os CSVs brutos, remove registros inválidos (ex.: gênero `XNA`), aplica encoding
-   binário e one-hot nas variáveis de texto, trata valores sentinela (o famoso
-   `DAYS_EMPLOYED = 365243`, que significa "sem emprego", e não "empregado há mil anos")
-   e salva o `clean_data.csv`.
+1. **Sanitização** (`DataPipeline/data_sanitization.py`) — limpeza e padronização dos
+   dados brutos. Carrega os CSVs, remove registros inválidos (ex.: gênero `XNA`), aplica
+   encoding binário e one-hot nas variáveis categóricas, trata valores sentinela
+   (ex.: `DAYS_EMPLOYED = 365243`, que representa "sem emprego") e gera o `clean_data.csv`.
 
-2. **Construção da ABT** (`DataPipeline/abt_transform.py`) — de 8 tabelas a 1 visão por cliente.
-   Agrega as tabelas secundárias (bureau, aplicações anteriores, cartão, parcelas...)
-   ao nível do cliente com estatísticas (min, max, mean, sum, var) e cria features
-   derivadas de negócio: razões renda/crédito, taxa de pagamento, dias de atraso,
-   severidade e tendência de inadimplência no bureau. Resultado: a **`abt.csv` com 838 features**.
+2. **Construção da ABT** (`DataPipeline/abt_transform.py`) — consolidação das 8 tabelas
+   em uma visão por cliente. Agrega as tabelas secundárias (bureau, aplicações anteriores,
+   cartão, parcelas) ao nível do cliente com estatísticas (min, max, mean, sum, var) e cria
+   features derivadas: razões renda/crédito, taxa de pagamento, dias de atraso, severidade
+   e tendência de inadimplência no bureau. Resultado: a `abt.csv` com **838 features**.
 
-3. **Modelagem** (`Model/`) — do simples ao campeão.
-   - `baseline.py`: treina uma **Regressão Logística** (com imputação e padronização)
-     como régua de comparação. Se o modelo complexo não superar isto, não vale a pena.
-   - `tune.py`: busca os melhores hiperparâmetros do LightGBM com **Optuna** e salva em `best_params.json`.
+3. **Modelagem** (`Model/`).
+   - `baseline.py`: treina uma **Regressão Logística** (com imputação e padronização) como referência de comparação.
+   - `tune.py`: otimiza os hiperparâmetros do LightGBM com **Optuna** e salva em `best_params.json`.
    - `train.py`: treina o **LightGBM final** com **K-Fold estratificado**, mede a
-     performance sem vazamento (out-of-fold), **persiste o modelo** em `Model/artifacts/`
+     performance out-of-fold (sem vazamento), persiste o modelo em `Model/artifacts/`
      e gera as predições e a importância das features.
 
-4. **Avaliação e análise** (notebooks) — a hora de olhar o modelo com olhar crítico e responder, com números na mão, à pergunta que todo mundo faz: *"dá mesmo para confiar nele?"*.
+4. **Avaliação e análise** (notebooks).
    - `DataPipeline/exp_analysis.ipynb`: análise exploratória dos dados limpos.
    - `Model/evaluation.ipynb` e `evaluation_part2.ipynb`: performance do modelo (AUC por fold, ROC, calibração, importância).
-   - `Model/kpi_analysis.ipynb`: traduz as predições em **R$** (inadimplência evitada, resultado líquido, corte ótimo).
+   - `Model/kpi_analysis.ipynb`: tradução das predições em indicadores de negócio (inadimplência evitada, resultado líquido, corte ótimo).
 
-5. **Deploy e MLOps** (`Model/predict.py`, `app/`, `MLOps/`) — colocando de pé.
+5. **Deploy e MLOps** (`Model/predict.py`, `app/`, `MLOps/`).
    O modelo treinado é servido por uma **API (FastAPI)** e um **painel (Streamlit)**,
-   orquestrado pelo **Airflow** e vigiado por um **monitoramento de drift (PSI)**.
+   orquestrado pelo **Airflow** e monitorado por detecção de drift (PSI).
 
 ---
 
@@ -146,7 +144,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🚀 Como treinar o modelo (do zero ao modelo salvo)
+## 🚀 Como treinar o modelo
 
 > ⚠️ **Ponto de atenção:** rode **sempre a partir da raiz do projeto** e com o modo
 > módulo (`python -m ...`). O `config.py` está na raiz, e é assim que os imports funcionam.
@@ -155,7 +153,7 @@ pip install -r requirements.txt
 ```bash
 python -m DataPipeline.data_sanitization
 ```
-Faz a faxina inicial e gera o `Dados/clean_data.csv` (~40s).
+Gera o `Dados/clean_data.csv` (~40s).
 
 ### 2️⃣ Construir a ABT (Analytical Base Table)
 ```bash
@@ -168,8 +166,8 @@ modelagem (~3 min).
 ```bash
 python -m Model.baseline
 ```
-Roda a **Regressão Logística** de comparação. Guarde o AUC dela: é a régua que o
-LightGBM precisa superar.
+Treina a **Regressão Logística** de referência. O AUC dela é a base de comparação
+que o LightGBM precisa superar.
 
 ### 4️⃣ Otimizar hiperparâmetros
 ```bash
