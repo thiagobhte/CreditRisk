@@ -256,7 +256,7 @@ curl -X POST http://localhost:8000/predict \
 
 ## 🐳 Infraestrutura e MLOps (Docker + Airflow)
 
-O jeito recomendado de rodar tudo junto é via **docker-compose**:
+Os serviços sobem via **docker-compose**:
 
 ```bash
 # API de predição                →  http://localhost:8000/docs
@@ -294,9 +294,6 @@ verdes na aba *Graph*.
 python -m MLOps.pipeline_orchestration                 # pipeline completo
 python -m MLOps.pipeline_orchestration --with-tuning   # incluindo tuning
 ```
-
-> Rede corporativa que bloqueia o container? Há um build offline com wheels locais
-> em [MLOps/Dockerfile.offline](MLOps/Dockerfile.offline).
 
 A **arquitetura completa da solução**, a estratégia de **monitoramento** e as
 **ações automatizadas + agentes de IA** estão detalhadas em
