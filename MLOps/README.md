@@ -195,14 +195,3 @@ A previsão não é o fim — ela **aciona decisões de negócio**:
 
 Todas as decisões automáticas são **logadas** (entrada, PD, decisão, versão do
 modelo) para auditoria e conformidade (governança).
-
----
-
-## 5. Próximos passos de desenvolvimento
-
-- **Feature Store** para servir as features da ABT em tempo real (hoje a API
-  recebe features já calculadas; o ideal é calculá-las on-the-fly a partir do ID).
-- **Model Registry** (MLflow) versionando modelo + métricas + dados.
-- **CI/CD**: testes de dados (Great Expectations) e de modelo antes do deploy.
-- **Explicabilidade em produção**: servir valores SHAP junto da predição.
-- **A/B testing / shadow deployment** para validar novo modelo antes de promover.
