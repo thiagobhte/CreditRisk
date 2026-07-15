@@ -1,0 +1,29 @@
+{
+  "project": "Home Credit Default Risk",
+  "model_type": "LGBMClassifier",
+  "trained_at": "2026-07-13T09:54:50",
+  "oof_auc": 0.790922,
+  "n_features": 836,
+  "n_estimators": 2319,
+  "params": {
+    "objective": "binary",
+    "metric": "auc",
+    "boosting_type": "gbdt",
+    "n_estimators": 2319,
+    "n_jobs": -1,
+    "random_state": 1001,
+    "verbose": -1,
+    "num_leaves": 18,
+    "max_depth": 4,
+    "min_child_samples": 149,
+    "subsample": 0.6789413648285026,
+    "colsample_bytree": 0.8291093206504649,
+    "reg_alpha": 0.9774892222355186,
+    "reg_lambda": 0.0010071750506814602,
+    "learning_rate": 0.025332301444888586
+  },
+  "decision_policy": {
+    "approve_below": 0.08,
+    "reject_above": 0.3
+  }
+}

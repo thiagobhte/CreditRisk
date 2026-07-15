@@ -1,0 +1,48 @@
+# ============================================================
+# Pipeline de dados
+# ============================================================
+numpy>=1.24
+pandas>=2.0
+
+# ============================================================
+# Modelagem
+# ============================================================
+lightgbm>=4.0
+scikit-learn>=1.3
+
+# ============================================================
+# Busca de hiperparâmetros (tune.py)
+# ============================================================
+# 4.7.0 é a versão estável atual (jan/2026)
+# >= 4.0 garante compatibilidade com TPESampler e MedianPruner
+# usados no tune.py
+optuna>=4.0
+
+# ============================================================
+# Visualização (notebooks exp_analysis e evaluation)
+# ============================================================
+matplotlib>=3.7
+seaborn>=0.12
+jinja2>=3.1.6
+
+# ============================================================
+# Serviço de predição (Model/predict.py + app/ FastAPI)
+# ============================================================
+# joblib persiste e carrega o modelo treinado (Model/artifacts/).
+joblib>=1.3
+# API REST de inferência (app/main.py) e servidor ASGI.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0
+
+# ============================================================
+# Painel e explicabilidade (app/streamlit_app.py + Model/explain.py)
+# ============================================================
+# SHAP explica CADA decisão individualmente ("por que este cliente foi
+# recusado?") — a importância nativa do LightGBM só dá a visão média.
+# Atenção: o shap depende do numba, que fixa um teto para a versão do numpy.
+# Deixar o numpy solto faz o pip resolver uma combinação incompatível.
+shap>=0.44
+numba>=0.59
+streamlit>=1.30
+plotly>=5.18

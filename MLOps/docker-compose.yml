@@ -1,0 +1,147 @@
+# ============================================================
+# docker-compose — Infraestrutura da solução de risco de crédito.
+#
+# Serviços:
+#   airflow     → orquestração com UI (http://localhost:8080, admin/admin)
+#   api         → serviço de predição FastAPI (http://localhost:8000/docs)
+#   pipeline    → roda o pipeline uma vez, sem Airflow (job efêmero)
+#   monitoring  → checa drift de dados (job efêmero)
+#
+# Uso:
+#   docker compose -f MLOps/docker-compose.yml up -d airflow   # UI do Airflow
+#   docker compose -f MLOps/docker-compose.yml up -d api       # API de predição
+#   docker compose -f MLOps/docker-compose.yml run --rm pipeline
+#
+# IMPORTANTE: os dados são montados por BIND-MOUNT de ../Dados para /data.
+# (Antes usávamos um volume nomeado vazio, e por isso o pipeline não achava
+#  os CSVs brutos e falhava.)
+# ============================================================
+
+services:
+
+  # ----------------------------------------------------------
+  # Airflow — orquestração do pipeline (UI + scheduler)
+  # ----------------------------------------------------------
+  # Modo standalone: SQLite + SequentialExecutor, num único container.
+  # Suficiente para demonstrar a DAG; em produção usaria Postgres + Celery/K8s.
+  airflow:
+    build:
+      context: ..
+      dockerfile: MLOps/airflow.Dockerfile
+    image: credit-risk-airflow:latest
+    ports:
+      # 8081 no host (e não 8080) de propósito: é comum já haver outro Airflow
+      # ocupando a 8080 na máquina, e um conflito de porta no meio de uma
+      # demonstração ao vivo é o tipo de erro que dá para evitar de graça.
+      - "8081:8080"
+    environment:
+      # A DAG mora junto do código do projeto, não em /opt/airflow/dags
+      AIRFLOW__CORE__DAGS_FOLDER: /project/MLOps
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      # PYTHONPATH: permite que as tasks importem config, DataPipeline e Model
+      PYTHONPATH: /project
+      # ISOLAMENTO: a DAG lê os CSVs brutos (read-only) mas escreve tudo —
+      # clean_data, abt e o modelo — num volume separado (/demo). Assim uma
+      # execução de demonstração NUNCA sobrescreve a ABT nem o modelo de
+      # produção treinados na base completa.
+      DATA_DIR: /demo
+      MODEL_DIR: /demo/artifacts
+      # Demo rápida: a DAG roda numa amostra (~2-3 min) em vez da base completa
+      # (~25 min) — tempo demais para uma apresentação ao vivo.
+      NUM_ROWS: "30000"
+    volumes:
+      - ../:/project
+      - airflow_demo:/demo                 # saídas da demo (isoladas)
+      - ../Dados/raw_data:/demo/raw_data:ro # dados brutos, somente leitura
+    # Script explícito: db migrate → cria admin → scheduler + webserver.
+    # (Encadear isso inline no YAML com && e & é frágil — ver o script.)
+    command: ["bash", "/project/MLOps/airflow-entrypoint.sh"]
+
+  # ----------------------------------------------------------
+  # API de predição (serviço de vida longa)
+  # ----------------------------------------------------------
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: credit-risk:latest
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - ../:/project
+      - ../Dados:/data
+    healthcheck:
+      # Usa o /health: o modelo precisa estar treinado para ficar "healthy"
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # ----------------------------------------------------------
+  # Streamlit — painel de decisão com explicabilidade (SHAP)
+  # ----------------------------------------------------------
+  # Consome os mesmos artefatos do modelo que a API (Model/artifacts), espelhando
+  # o diagrama da arquitetura: o Model alimenta em paralelo a API (integração
+  # máquina-a-máquina) e o painel (analista humano).
+  streamlit:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: credit-risk:latest
+    command: >
+      streamlit run app/streamlit_app.py
+      --server.port 8501
+      --server.address 0.0.0.0
+      --server.headless true
+    ports:
+      - "8501:8501"
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - ../:/project
+      - ../Dados:/data
+    restart: unless-stopped
+
+  # ----------------------------------------------------------
+  # Pipeline sem Airflow (job efêmero — roda e encerra)
+  # ----------------------------------------------------------
+  pipeline:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: credit-risk:latest
+    command: python -m MLOps.pipeline_orchestration
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - ../:/project
+      - ../Dados:/data
+
+  # ----------------------------------------------------------
+  # Monitoramento de drift (job efêmero — rode agendado)
+  # ----------------------------------------------------------
+  monitoring:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: credit-risk:latest
+    command: >
+      python -m MLOps.monitoring
+      --reference /data/abt.csv
+      --current   /data/abt.csv
+      --output    /data/drift_report.json
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - ../:/project
+      - ../Dados:/data
+
+volumes:
+  # Saídas das execuções de demonstração do Airflow — mantidas fora de Dados/
+  # para não sobrescrever a ABT e o modelo de produção.
+  airflow_demo:
