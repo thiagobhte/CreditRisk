@@ -118,9 +118,7 @@ CreditRisk/
 ```
 
 > **Nota sobre o `config.py`:** o projeto usa **um único** arquivo de configuração
-> compartilhado na raiz (importado por `DataPipeline/` e `Model/`), em vez de
-> duplicá-lo em cada pasta — evita divergência entre cópias e mantém uma única
-> fonte da verdade.
+> na raiz, importado por `DataPipeline/` e `Model/`.
 
 ---
 
