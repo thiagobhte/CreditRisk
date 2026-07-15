@@ -1,0 +1,45 @@
+# ===== Sistema / editor =====
+/.DS_Store
+/.vscode
+.idea/
+
+# ===== Python =====
+__pycache__/
+*.pyc
+venv/
+.venv/
+.ipynb_checkpoints/
+
+# ===== Dados (grandes / regeneráveis) — não versionar =====
+# A pasta /Dados existe no repositório (via Dados/README.md), mas os CSVs
+# em si são grandes demais para o git e ficam ignorados.
+/Dados/raw_data
+/Dados/*.csv
+/mnt
+
+# ===== Saídas geradas na raiz =====
+/feature_importance.csv
+/feature_importance_baseline.csv
+/submission_baseline.csv
+/*.csv
+drift_report.json
+
+# ===== Config pessoal do Claude (não compartilhar) =====
+.claude/settings.local.json
+
+# ===== Documentos auxiliares de trabalho (não fazem parte da entrega) =====
+# Guias internos de apoio — checklist, passo a passo, contexto e handoff.
+# Ficam locais, não vão para o repositório.
+/CHECKLIST_ENTREGA.md
+/PASSO_A_PASSO_SERVICOS.md
+/CONTEXTO_APRESENTACAO.md
+/HANDOFF_CONTEXTO.md
+
+# Enunciado do trabalho (especificação da atividade, não é entregável)
+/ProjetoFinal_v2.pdf
+
+# Observação: Model/artifacts/ (modelo treinado) É versionado de propósito,
+# para que a API/predict funcionem sem precisar re-treinar. São ~4 MB.
+
+# ===== Wheels para build offline (249 MB - nunca versionar) =====
+wheelhouse/

@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "best_auc_1fold": 0.783108,
+    "best_iteration": 2060,
+    "n_estimators": 2266,
+    "tuned_at": "2026-07-04T21:10:05",
+    "note": "AUC estimado em 1 fold — rode train.py para obter o AUC real nos 5 folds com estes parâmetros."
+  },
+  "params": {
+    "objective": "binary",
+    "metric": "auc",
+    "boosting_type": "gbdt",
+    "n_estimators": 2266,
+    "n_jobs": -1,
+    "random_state": 1001,
+    "verbose": -1,
+    "num_leaves": 18,
+    "max_depth": 4,
+    "min_child_samples": 149,
+    "subsample": 0.6789413648285026,
+    "colsample_bytree": 0.8291093206504649,
+    "reg_alpha": 0.9774892222355186,
+    "reg_lambda": 0.0010071750506814602,
+    "learning_rate": 0.025332301444888586
+  }
+}

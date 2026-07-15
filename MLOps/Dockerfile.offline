@@ -1,0 +1,41 @@
+# ============================================================
+# Dockerfile.offline — build SEM acesso à internet dentro do container.
+#
+# Por que existe:
+#   Em algumas redes (corporativas, com agente de segurança que filtra o tráfego
+#   das VMs), o host tem internet mas os containers não — nem o `ping` sai. Tanto
+#   o `pip install` quanto o `apt-get` do Dockerfile normal falham por timeout.
+#
+# Estratégia:
+#   Parte da imagem credit-risk:latest, que já foi construída quando havia rede
+#   e portanto já traz o libgomp1 (runtime OpenMP do LightGBM) e as dependências
+#   antigas. Só instala, a partir de wheels baixados no host, o que é novo.
+#
+# Como usar:
+#   1. No host (que TEM internet), baixe os wheels Linux:
+#        pip download -r requirements.txt -d wheelhouse \
+#          --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 \
+#          --python-version 3.11 --only-binary=:all:
+#   2. Construa:
+#        docker build -f MLOps/Dockerfile.offline -t credit-risk:latest .
+#
+# O Dockerfile da raiz continua sendo o oficial — este é só a saída de
+# emergência para redes restritas.
+# ============================================================
+FROM credit-risk:latest
+
+WORKDIR /project
+
+# --no-index desliga o PyPI: instala exclusivamente dos wheels locais.
+COPY wheelhouse /tmp/wheelhouse
+COPY requirements.txt .
+RUN pip install --no-cache-dir --no-index --find-links=/tmp/wheelhouse -r requirements.txt \
+    && rm -rf /tmp/wheelhouse
+
+COPY . .
+
+ENV DATA_DIR=/data
+
+EXPOSE 8000 8501
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

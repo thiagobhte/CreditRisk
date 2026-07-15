@@ -1,0 +1,15 @@
+# Dados (montados via volume, não vão para a imagem)
+Dados/
+raw_data/
+*.csv
+!feature_importance*.csv
+
+# Artefatos pesados / ambiente
+venv/
+.venv/
+__pycache__/
+*.pyc
+.git/
+.ipynb_checkpoints/
+*.ipynb
+Model/lgbm_importances.png
