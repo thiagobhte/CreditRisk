@@ -256,48 +256,17 @@ curl -X POST http://localhost:8000/predict \
 
 ## 🐳 Infraestrutura e MLOps (Docker + Airflow)
 
-Os serviços sobem via **docker-compose**:
+A solução é containerizada e orquestrada. Subida rápida dos serviços via **docker-compose**:
 
 ```bash
-# API de predição                →  http://localhost:8000/docs
-docker compose -f MLOps/docker-compose.yml up -d --build api
-
-# Painel Streamlit (SHAP)        →  http://localhost:8501
-docker compose -f MLOps/docker-compose.yml up -d --build streamlit
-
-# Airflow — orquestração com UI  →  http://localhost:8081  (admin / admin)
-docker compose -f MLOps/docker-compose.yml up -d --build airflow
-
-# Pipeline sem Airflow (job único)
-docker compose -f MLOps/docker-compose.yml run --rm pipeline
-
-# Monitoramento de drift de dados (PSI)
-docker compose -f MLOps/docker-compose.yml run --rm monitoring
-
-# Parar tudo
-docker compose -f MLOps/docker-compose.yml down
+docker compose -f MLOps/docker-compose.yml up -d --build api        # API     → http://localhost:8000/docs
+docker compose -f MLOps/docker-compose.yml up -d --build streamlit  # Painel  → http://localhost:8501
+docker compose -f MLOps/docker-compose.yml up -d --build airflow    # Airflow → http://localhost:8081  (admin/admin)
 ```
 
-### Airflow — a orquestração
-A DAG **`credit_risk_pipeline`** (`sanitize → build_abt → train`) é definida em
-[MLOps/pipeline_orchestration.py](MLOps/pipeline_orchestration.py) e carregada
-automaticamente pelo Airflow. Acesse **http://localhost:8081** (login `admin/admin`),
-ative a DAG e clique em **Trigger** para executá-la, acompanhando as tasks ficarem
-verdes na aba *Graph*.
-
-> A variável `NUM_ROWS=30000` no compose faz a DAG rodar sobre uma **amostra**
-> (~2-3 min, ideal para demonstração) e num volume isolado, **sem sobrescrever** o
-> modelo de produção. Remova-a para processar a base completa.
-
-### Orquestração sem Docker
-```bash
-python -m MLOps.pipeline_orchestration                 # pipeline completo
-python -m MLOps.pipeline_orchestration --with-tuning   # incluindo tuning
-```
-
-A **arquitetura completa da solução**, a estratégia de **monitoramento** e as
-**ações automatizadas + agentes de IA** estão detalhadas em
-[MLOps/README.md](MLOps/README.md).
+👉 A **arquitetura completa** (diagrama + componentes), a orquestração via **Airflow**,
+o **monitoramento de drift (PSI)** e as **ações automatizadas + agentes de IA** estão
+documentadas em **[MLOps/README.md](MLOps/README.md)**.
 
 ---
 
