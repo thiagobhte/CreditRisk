@@ -326,4 +326,4 @@ A **arquitetura completa da solução**, a estratégia de **monitoramento** e as
 
 ## 🔗 Repositório
 
-Github: https://github.com/ronaldoacj/CreditRisk
+Github: https://github.com/thiagobhte/CreditRisk
