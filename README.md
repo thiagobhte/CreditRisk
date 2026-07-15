@@ -130,7 +130,7 @@ CreditRisk/
 # Clone o repositório e entre na pasta do projeto
 cd CreditRisk
 
-# Crie e ative um ambiente virtual (opcional, mas recomendado)
+# Crie e ative um ambiente virtual
 python -m venv venv
 source venv/bin/activate   # macOS/Linux
 venv\Scripts\activate      # Windows
