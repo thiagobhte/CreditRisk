@@ -57,9 +57,11 @@ from config import (
 )
 from MLOps.db import get_engine
 
-# Quantos clientes a carga leva por padrão. A base inteira (356 mil clientes ×
-# ~615 features não-nulas) passaria de 5 GB no banco e levaria muito tempo —
-# desproporcional para uma demonstração. Com --full carrega tudo.
+# Limite padrão de uma carga INCREMENTAL (a que o Airflow dispara a cada
+# execução da DAG). O banco é povoado uma vez com a base completa
+# (`--full`: 356 mil clientes, ~3,9 GB, ~16 min); as execuções seguintes só
+# precisam atualizar uma fatia, e como a carga é UPSERT, elas atualizam o que
+# tocam sem apagar o resto.
 DEFAULT_LIMIT = int(os.environ.get("ABT_LOAD_LIMIT", "20000"))
 
 
@@ -109,12 +111,33 @@ def _linha_para_payload(registro: dict) -> str:
 # CARGA VIA COPY
 # ============================================================
 
-def _copy(engine, tabela: str, colunas: list, linhas: list) -> int:
+# Tipos das colunas de carga, usados para criar a tabela temporária do UPSERT.
+TIPOS_COLUNA = {
+    "sk_id_curr":  "bigint",
+    "target":      "smallint",
+    "is_train":    "boolean",
+    "features":    "jsonb",
+    "payload":     "jsonb",
+    "abt_version": "text",
+}
+
+
+def _copy(engine, tabela: str, colunas: list, linhas: list, chave: str = None) -> int:
     """
     Envia um lote para o Postgres usando COPY.
 
-    Monta um CSV em memória e o entrega ao servidor num único comando. É uma
+    Monta um CSV em memória e o entrega ao servidor num único comando — uma
     ordem de grandeza mais rápido que INSERTs individuais.
+
+    Com `chave`, faz UPSERT em vez de inserção simples: o lote vai primeiro
+    para uma tabela temporária e de lá é fundido no destino (ON CONFLICT DO
+    UPDATE).
+
+    Por que isso importa: a task do Airflow recarrega uma AMOSTRA a cada
+    execução. Se ela apagasse a tabela antes (TRUNCATE), acionar a DAG numa
+    demonstração destruiria a base completa já carregada e deixaria só a
+    amostra no lugar. Com UPSERT, a execução atualiza o que tocar e preserva
+    todo o resto.
     """
     if not linhas:
         return 0
@@ -124,15 +147,31 @@ def _copy(engine, tabela: str, colunas: list, linhas: list) -> int:
     escritor.writerows(linhas)
     buffer.seek(0)
 
-    sql = f"COPY {tabela} ({', '.join(colunas)}) FROM STDIN WITH (FORMAT csv)"
-
     # COPY é uma operação do driver (psycopg2), não do SQLAlchemy: precisamos da
     # conexão crua. O commit é explícito porque raw_connection não usa a
     # transação gerenciada pela engine.
     bruta = engine.raw_connection()
     try:
         with bruta.cursor() as cur:
-            cur.copy_expert(sql, buffer)
+            if chave is None:
+                cur.copy_expert(
+                    f"COPY {tabela} ({', '.join(colunas)}) FROM STDIN WITH (FORMAT csv)",
+                    buffer,
+                )
+            else:
+                # A temporária vive só nesta conexão e some no fim da transação.
+                definicao = ", ".join(f"{c} {TIPOS_COLUNA[c]}" for c in colunas)
+                cur.execute(f"CREATE TEMP TABLE lote ({definicao}) ON COMMIT DROP")
+                cur.copy_expert(
+                    f"COPY lote ({', '.join(colunas)}) FROM STDIN WITH (FORMAT csv)",
+                    buffer,
+                )
+                atualiza = ", ".join(f"{c} = EXCLUDED.{c}" for c in colunas if c != chave)
+                cur.execute(f"""
+                    INSERT INTO {tabela} ({', '.join(colunas)})
+                    SELECT {', '.join(colunas)} FROM lote
+                    ON CONFLICT ({chave}) DO UPDATE SET {atualiza}
+                """)
         bruta.commit()
     finally:
         bruta.close()
@@ -241,7 +280,8 @@ def load_abt(limite: int = None, truncate: bool = False,
                 versao,
             ])
 
-        total += _copy(engine, "feature_store.abt", colunas_destino, linhas)
+        total += _copy(engine, "feature_store.abt", colunas_destino, linhas,
+                       chave="sk_id_curr")
         print(f"    {total:,} clientes carregados...", end="\r")
 
     duracao = time.time() - inicio
@@ -296,7 +336,8 @@ def load_clean(limite: int = None, truncate: bool = False) -> int:
                 _linha_para_payload(registros[i]),
             ])
 
-        total += _copy(engine, "staging.clean_data", colunas_destino, linhas)
+        total += _copy(engine, "staging.clean_data", colunas_destino, linhas,
+                         chave="sk_id_curr")
         print(f"    {total:,} linhas carregadas...", end="\r")
 
     print(f"\n  OK: {total:,} linhas em {time.time() - inicio:.0f}s")

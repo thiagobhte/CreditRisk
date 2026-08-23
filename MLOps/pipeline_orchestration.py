@@ -74,8 +74,10 @@ def step_load_db(limite="auto"):
     from MLOps.load_to_db import load_abt, load_clean, DEFAULT_LIMIT
     if limite == "auto":
         limite = DEFAULT_LIMIT
-    load_clean(limite=limite, truncate=True)
-    load_abt(limite=limite, truncate=True)
+    # Sem truncate de proposito: a carga e um UPSERT. Uma execucao de
+    # demonstracao atualiza a amostra e preserva a base completa ja carregada.
+    load_clean(limite=limite)
+    load_abt(limite=limite)
 
 
 # ============================================================

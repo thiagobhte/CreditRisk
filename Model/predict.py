@@ -113,6 +113,112 @@ def _align(df: pd.DataFrame, feats: list) -> pd.DataFrame:
 
 
 # ============================================================
+# SIMULAÇÃO: APLICAR ALTERAÇÕES DO ANALISTA
+# ============================================================
+# O analista altera poucas variáveis (renda, crédito, parcela, idade, scores
+# externos). Mas várias features da ABT são DERIVADAS dessas — se mudarmos a
+# renda sem recalcular a razão parcela/renda, o modelo recebe um cliente que
+# não existe: renda nova com endividamento antigo. O resultado seria uma
+# simulação sem sentido, e pior, silenciosa.
+#
+# Fórmulas idênticas às de DataPipeline/abt_transform.py — é o mesmo cálculo
+# que gerou a ABT no treino, e precisa continuar sendo na simulação.
+
+EPS = 1e-5  # mesmo epsilon do abt_transform: evita divisão por zero
+
+# Variáveis que o analista pode alterar → features que precisam ser refeitas.
+DERIVADAS_POR_VARIAVEL = {
+    "AMT_INCOME_TOTAL": ["INCOME_CREDIT_PERC", "INCOME_PER_PERSON", "ANNUITY_INCOME_PERC",
+                         "DEBT_INCOME_RATIO", "CC_UTILIZATION_INCOME"],
+    "AMT_CREDIT":       ["INCOME_CREDIT_PERC", "PAYMENT_RATE", "CURR_PREV_CREDIT_RATIO",
+                         "CREDIT_GOODS_PRICE_RATIO"],
+    "AMT_ANNUITY":      ["ANNUITY_INCOME_PERC", "PAYMENT_RATE"],
+    "DAYS_BIRTH":       ["DAYS_EMPLOYED_PERC"],
+}
+
+
+def _num(dados: dict, chave: str):
+    """Lê um número do dicionário de features, tratando ausente/NaN como None."""
+    valor = dados.get(chave)
+    if valor is None:
+        return None
+    try:
+        valor = float(valor)
+    except (TypeError, ValueError):
+        return None
+    return None if (np.isnan(valor) or np.isinf(valor)) else valor
+
+
+def _divide(numerador, denominador, eps: float = 0.0):
+    """Divisão que devolve None quando não dá para calcular."""
+    if numerador is None or denominador is None:
+        return None
+    divisor = denominador + eps
+    if divisor == 0:
+        return None
+    resultado = numerador / divisor
+    return None if (np.isnan(resultado) or np.isinf(resultado)) else resultado
+
+
+def apply_overrides(features: dict, overrides: dict) -> dict:
+    """
+    Aplica as alterações do analista e recalcula as features derivadas afetadas.
+
+    Args:
+        features:  o cliente completo, como veio do banco (836 features)
+        overrides: só o que o analista mudou (ex.: {"AMT_INCOME_TOTAL": 250000})
+
+    Returns:
+        Novo dicionário de features, coerente: as derivadas refletem os valores
+        novos, e as que não dependem do que mudou permanecem intactas.
+    """
+    resultado = dict(features)
+    resultado.update({k: v for k, v in overrides.items() if v is not None})
+
+    # Só recalcula o que foi realmente afetado — recalcular tudo poderia
+    # sobrescrever, com uma fórmula aproximada, valores que a ABT calculou
+    # com mais informação do que temos aqui.
+    afetadas = set()
+    for variavel in overrides:
+        afetadas.update(DERIVADAS_POR_VARIAVEL.get(variavel, []))
+    if not afetadas:
+        return resultado
+
+    renda   = _num(resultado, "AMT_INCOME_TOTAL")
+    credito = _num(resultado, "AMT_CREDIT")
+    parcela = _num(resultado, "AMT_ANNUITY")
+
+    formulas = {
+        "INCOME_CREDIT_PERC":       lambda: _divide(renda, credito),
+        "PAYMENT_RATE":             lambda: _divide(parcela, credito),
+        "ANNUITY_INCOME_PERC":      lambda: _divide(parcela, renda),
+        "INCOME_PER_PERSON":        lambda: _divide(renda, _num(resultado, "CNT_FAM_MEMBERS")),
+        "DAYS_EMPLOYED_PERC":       lambda: _divide(_num(resultado, "DAYS_EMPLOYED"),
+                                                    _num(resultado, "DAYS_BIRTH")),
+        "DEBT_INCOME_RATIO":        lambda: _divide(_num(resultado, "BURO_AMT_CREDIT_SUM_DEBT_SUM"),
+                                                    renda, EPS),
+        "CURR_PREV_CREDIT_RATIO":   lambda: _divide(credito,
+                                                    _num(resultado, "PREV_AMT_CREDIT_MEAN"), EPS),
+        "CREDIT_GOODS_PRICE_RATIO": lambda: _divide(credito,
+                                                    _num(resultado, "AMT_GOODS_PRICE"), EPS),
+        "CC_UTILIZATION_INCOME":    lambda: _divide(_num(resultado, "CC_AMT_BALANCE_MEAN"),
+                                                    renda, EPS),
+    }
+
+    for feature in afetadas:
+        calculo = formulas.get(feature)
+        if calculo is None:
+            continue
+        novo_valor = calculo()
+        # Só grava se deu para calcular. Uma feature que já era ausente para
+        # este cliente (ex.: nunca teve cartão) deve continuar ausente.
+        if novo_valor is not None:
+            resultado[feature] = novo_valor
+
+    return resultado
+
+
+# ============================================================
 # TRADUÇÃO PD → DECISÃO DE NEGÓCIO
 # ============================================================
 
@@ -165,6 +271,12 @@ def predict(records) -> list:
     X = _align(df, feats)
     proba = model.predict_proba(X)[:, 1]
 
+    # Quantas features o modelo esperava e não recebeu. Antes isso passava em
+    # silêncio: uma requisição com 3 features era pontuada como se as outras 833
+    # fossem "desconhecidas", e devolvia uma PD com cara de confiável. Agora a
+    # resposta carrega o número, e quem consome decide se confia.
+    ausentes = X.isna().sum(axis=1).tolist()
+
     results = []
     for i, pd_value in enumerate(proba):
         pd_value = float(pd_value)
@@ -173,6 +285,8 @@ def predict(records) -> list:
             "probability_default": round(pd_value, 6),
             "risk_band":           _risk_band(pd_value),
             "decision":            _decision(pd_value),
+            "n_features_expected": len(feats),
+            "n_features_missing":  int(ausentes[i]),
         })
     return results
 

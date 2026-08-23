@@ -239,18 +239,43 @@ externos) e ver a decisão mudar na hora.
 uvicorn app.main:app --reload --port 8000
 ```
 - Documentação interativa (Swagger): http://localhost:8000/docs
-- `GET /health` — status do serviço + metadados do modelo
-- `POST /predict` — 1 cliente
-- `POST /predict/batch` — vários clientes
 
-Exemplo de requisição:
+| Endpoint | O que faz |
+|---|---|
+| `GET /health` | Saúde do serviço, do modelo e do banco |
+| `GET /clients` | Lista IDs válidos na feature store |
+| `GET /clients/{id}` | O que o banco sabe sobre o cliente |
+| **`POST /predict/{id}`** | **Busca as features no banco, aplica simulações e pontua** |
+| `POST /predict` | Payload completo (compatibilidade) |
+| `POST /predict/batch` | Vários clientes |
+| `GET /predictions/recent` | Últimas decisões registradas (auditoria) |
+
+**De onde a API tira as features.** Um cliente tem 836 features, quase todas
+agregações do histórico (bureau, aplicações anteriores, parcelas, cartão). Quem
+consome a API é o sistema de originação, que conhece a proposta — renda, valor
+pedido, prazo — e **não** o histórico consolidado. Por isso a API busca o
+cliente na `feature_store.abt` a partir do ID:
+
 ```bash
-curl -X POST http://localhost:8000/predict \
+# Pontua o cliente com o histórico que está no banco
+curl -X POST http://localhost:8000/predict/100002
+
+# Mesmo cliente, simulando um score externo melhor
+curl -X POST http://localhost:8000/predict/100002 \
   -H "Content-Type: application/json" \
-  -d '{"SK_ID_CURR": 100002, "AMT_CREDIT": 406597.5, "AMT_INCOME_TOTAL": 202500.0, "PAYMENT_RATE": 0.06}'
+  -d '{"EXT_SOURCE_2": 0.85}'
 ```
-> Não precisa enviar todas as features: as ausentes viram NaN (o LightGBM lida com
-> isso nativamente). Campos vazios no JSON devem ir como `null`.
+
+A resposta declara a origem de cada coisa: `features_from_store` (quantas vieram
+do banco), `features_overridden` (o que você alterou) e `derived_recalculated`
+(as features derivadas que foram refeitas — alterar a renda sem recalcular a
+razão parcela/renda entregaria ao modelo um cliente que não existe).
+
+> **Por que isso importa.** O cliente 100002, enviado com 3 features na mão,
+> recebe `PD 0,046 → APROVAR`. Buscado no banco, com as 658 features que ele
+> realmente tem, recebe `PD 0,346 → RECUSAR` — e o desfecho real dele é
+> inadimplência (`TARGET = 1`). O campo `n_features_missing` na resposta existe
+> para tornar essa diferença visível em vez de silenciosa.
 
 ---
 
