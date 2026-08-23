@@ -488,6 +488,59 @@ def metricas_do_modelo() -> dict:
 
 
 # ============================================================
+# MONITORAMENTO
+# ============================================================
+# Expor o monitoramento pela API (e não deixar o painel ler o banco direto)
+# mantém a mesma regra do resto: um único lugar concentra o acesso aos dados da
+# solução, e qualquer consumidor — painel, alertas, um agente de IA — enxerga
+# exatamente os mesmos números.
+
+@app.get("/monitoring/runs", tags=["monitoramento"])
+def execucoes_de_monitoramento(
+    limite: int = Query(20, ge=1, le=100),
+    tipo: Optional[str] = Query(None, description="data_drift, prediction_drift ou performance"),
+) -> dict:
+    """Histórico de execuções de monitoramento — a série que permite ver tendência."""
+    from MLOps.monitoring import historico
+    try:
+        return {"execucoes": historico(limite=limite, tipo=tipo)}
+    except Exception as erro:
+        raise HTTPException(status_code=503, detail=f"Banco indisponivel: {erro}")
+
+
+@app.get("/monitoring/runs/{run_id}/drift", tags=["monitoramento"])
+def drift_de_uma_execucao(run_id: int = Path(..., description="ID da execução")) -> dict:
+    """PSI de cada feature naquela execução."""
+    from MLOps.monitoring import drift_da_execucao
+    try:
+        linhas = drift_da_execucao(run_id)
+    except Exception as erro:
+        raise HTTPException(status_code=503, detail=f"Banco indisponivel: {erro}")
+    if not linhas:
+        raise HTTPException(status_code=404, detail=f"Execucao {run_id} sem metricas de drift.")
+    return {"run_id": run_id, "metricas": linhas}
+
+
+@app.get("/monitoring/performance", tags=["monitoramento"])
+def performance_por_safra(limite: int = Query(50, ge=1, le=200)) -> dict:
+    """
+    AUC/KS/Gini por safra, com a referência do treino.
+
+    É a resposta para "o modelo ainda funciona?" — e a única camada que mede a
+    perda de verdade, em vez de inferi-la de um proxy.
+    """
+    from MLOps.monitoring import serie_performance, AUC_REFERENCIA, QUEDA_TOLERADA
+    try:
+        return {
+            "referencia_treino": AUC_REFERENCIA,
+            "limite_de_alerta": round(AUC_REFERENCIA * (1 - QUEDA_TOLERADA), 6),
+            "safras": serie_performance(limite=limite),
+        }
+    except Exception as erro:
+        raise HTTPException(status_code=503, detail=f"Banco indisponivel: {erro}")
+
+
+# ============================================================
 # AUDITORIA
 # ============================================================
 

@@ -29,27 +29,30 @@ COMMENT ON SCHEMA mlops         IS 'Governanca: registro de modelos e monitorame
 -- FUNÇÃO AUXILIAR: leitura numérica segura de dentro do JSONB
 -- ============================================================
 -- A ABT tem NaN/inf em abundância (razões com denominador zero, clientes sem
--- histórico). Um cast direto `(features->>'X')::numeric` derrubaria a carga
+-- histórico). Um cast direto `(features->>'X')::numeric` derrubaria a consulta
 -- inteira no primeiro valor inválido. Esta função devolve NULL nesses casos.
 --
 -- Precisa ser IMMUTABLE para poder ser usada em coluna GERADA (mais abaixo).
+--
+-- POR QUE SQL PURO, E NÃO plpgsql COM `EXCEPTION`:
+--   a versão com bloco EXCEPTION parecia mais natural, mas capturar exceção em
+--   plpgsql abre uma SUBTRANSAÇÃO — e o Postgres proíbe subtransação dentro de
+--   consulta PARALELA. O monitoramento lê 30 features de uma amostra grande, o
+--   planejador paraleliza, e a consulta quebrava com
+--   "cannot start subtransactions during a parallel operation".
+--   Validar o texto ANTES de converter resolve: sem exceção, sem subtransação,
+--   função inlineável pelo planejador e de fato PARALLEL SAFE.
 CREATE OR REPLACE FUNCTION feature_store.jsonb_num(payload jsonb, chave text)
 RETURNS numeric
-LANGUAGE plpgsql
+LANGUAGE sql
 IMMUTABLE
 PARALLEL SAFE
 AS $func$
-DECLARE
-    v text;
-BEGIN
-    v := payload ->> chave;
-    IF v IS NULL OR v IN ('NaN', 'nan', 'Infinity', '-Infinity', 'inf', '-inf', '') THEN
-        RETURN NULL;
-    END IF;
-    RETURN v::numeric;
-EXCEPTION WHEN others THEN
-    RETURN NULL;
-END;
+    SELECT CASE
+        WHEN payload ->> chave ~ '^-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?$'
+        THEN (payload ->> chave)::numeric
+        ELSE NULL          -- cobre NaN, Infinity, texto e ausência
+    END;
 $func$;
 
 COMMENT ON FUNCTION feature_store.jsonb_num(jsonb, text)

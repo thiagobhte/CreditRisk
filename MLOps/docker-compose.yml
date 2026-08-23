@@ -187,18 +187,23 @@ services:
       - ../Dados:/data
 
   # ----------------------------------------------------------
-  # Monitoramento de drift (job efêmero — rode agendado)
+  # Monitoramento (job efêmero — rode agendado, ou pela DAG)
   # ----------------------------------------------------------
+  # Roda as três camadas e PERSISTE o resultado em mlops.monitoring_runs.
+  #
+  # A versão anterior deste serviço comparava `abt.csv` com ele mesmo e gravava
+  # um JSON solto: o PSI dava zero por construção, e o relatório era
+  # sobrescrito a cada execução. Não havia o que detectar nem série histórica.
+  #
+  # Para demonstrar a detecção sobre uma população deslocada:
+  #   docker compose -f MLOps/docker-compose.yml run --rm monitoring \
+  #     python -m MLOps.monitoring --data-drift --simular-choque
   monitoring:
     build:
       context: ..
       dockerfile: Dockerfile
     image: credit-risk:latest
-    command: >
-      python -m MLOps.monitoring
-      --reference /data/abt.csv
-      --current   /data/abt.csv
-      --output    /data/drift_report.json
+    command: python -m MLOps.monitoring --tudo
     environment:
       DATA_DIR: /data
       DB_HOST: postgres
