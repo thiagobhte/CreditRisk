@@ -15,10 +15,10 @@ Dois modos de execução:
        python -m MLOps.pipeline_orchestration
        python -m MLOps.pipeline_orchestration --with-tuning --trials 30
 
-2. AIRFLOW — o mesmo grafo de dependências exposto como uma DAG. O Airflow
-   dá agendamento, retries, backfill e observabilidade que o modo standalone
-   não tem. A DAG só é definida se o pacote `airflow` estiver instalado, então
-   este arquivo continua importável sem o Airflow.
+2. AIRFLOW — as DAGs vivem em MLOps/dags/ e chamam os mesmos comandos.
+   O Airflow dá agendamento, retries, backfill e observabilidade que o modo
+   standalone não tem. Este arquivo não define DAG nenhuma: continua sendo só
+   a lógica das etapas, importável e executável sem o Airflow instalado.
 
 Cada etapa é uma função `run()` já existente nos módulos do projeto — aqui só
 as encadeamos, sem reimplementar nada.
