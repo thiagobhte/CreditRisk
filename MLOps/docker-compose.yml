@@ -135,9 +135,10 @@ services:
   # ----------------------------------------------------------
   # Streamlit — painel de decisão com explicabilidade (SHAP)
   # ----------------------------------------------------------
-  # Consome os mesmos artefatos do modelo que a API (Model/artifacts), espelhando
-  # o diagrama da arquitetura: o Model alimenta em paralelo a API (integração
-  # máquina-a-máquina) e o painel (analista humano).
+  # O painel NÃO carrega o modelo: é um cliente HTTP da API. Existe um único
+  # lugar que pontua crédito, e o painel passa por ele como qualquer outro
+  # consumidor — inclusive para que a decisão vista na tela fique registrada
+  # em serving.predictions, como toda decisão da API.
   streamlit:
     build:
       context: ..
@@ -153,8 +154,13 @@ services:
     environment:
       DATA_DIR: /data
       DB_HOST: postgres
+      # Dentro da rede do compose os serviços se enxergam pelo NOME do serviço.
+      # Rodando o painel no host, exporte API_URL=http://localhost:8000
+      API_URL: http://api:8000
     depends_on:
       postgres:
+        condition: service_healthy
+      api:
         condition: service_healthy
     volumes:
       - ../:/project

@@ -353,6 +353,141 @@ def predict_batch(req: BatchRequest) -> list:
 
 
 # ============================================================
+# EXPLICABILIDADE
+# ============================================================
+# Ficam na API, e não no painel, de propósito: explicar uma decisão de crédito
+# é uma capacidade do SERVIÇO, não de uma tela. Assim qualquer consumidor —
+# o painel do analista, um sistema de ouvidoria, um relatório regulatório —
+# obtém a mesma justificativa, calculada pelo mesmo modelo.
+
+# Origem de cada feature, deduzida do prefixo que o abt_transform usa ao
+# agregar cada tabela. É o que responde "de onde vêm as outras variáveis?".
+ORIGEM_POR_PREFIXO = (
+    ("BURO_",     "Bureau de crédito"),
+    ("BUREAU_",   "Bureau de crédito"),
+    ("ACTIVE_",   "Bureau de crédito"),
+    ("CLOSED_",   "Bureau de crédito"),
+    ("PREV_",     "Aplicações anteriores"),
+    ("APPROVED_", "Aplicações anteriores"),
+    ("REFUSED_",  "Aplicações anteriores"),
+    ("POS_",      "POS / crédito no ponto de venda"),
+    ("INSTAL_",   "Histórico de parcelas"),
+    ("CC_",       "Cartão de crédito"),
+)
+
+
+def origem_da_feature(nome: str) -> str:
+    """Diz de qual tabela de origem uma feature veio."""
+    for prefixo, origem in ORIGEM_POR_PREFIXO:
+        if nome.startswith(prefixo):
+            return origem
+    return "Cadastro e proposta"
+
+
+@app.get("/features/origins", tags=["explicabilidade"])
+def origens_das_features() -> dict:
+    """
+    De onde vêm as 836 features do modelo, agrupadas por tabela de origem.
+
+    Só 249 delas vêm do cadastro e da proposta — o que um formulário de crédito
+    coleta. As outras 587 são agregações do histórico do cliente, e é por isso
+    que a API precisa lê-las do banco em vez de esperá-las na requisição.
+    """
+    from Model.predict import _load_artifacts
+    _, feats, _ = _load_artifacts()
+
+    grupos: Dict[str, int] = {}
+    for nome in feats:
+        origem = origem_da_feature(nome)
+        grupos[origem] = grupos.get(origem, 0) + 1
+
+    return {
+        "total": len(feats),
+        "por_origem": dict(sorted(grupos.items(), key=lambda kv: -kv[1])),
+        "simulaveis": sorted(SimulationRequest.model_fields.keys()),
+    }
+
+
+@app.post("/explain/{sk_id_curr}", tags=["explicabilidade"])
+def explicar_cliente(
+    sk_id_curr: int = Path(..., description="ID do cliente"),
+    simulacao: Optional[SimulationRequest] = None,
+    top_n: int = Query(12, ge=1, le=30, description="Quantas features retornar"),
+) -> dict:
+    """
+    Explica a decisão de um cliente (valores SHAP), com a mesma simulação
+    aceita pelo /predict/{id}.
+
+    Responde "por que ESTE cliente foi recusado?" — a explicação individual
+    exigida em crédito, que a importância média do modelo não dá.
+    """
+    from Model.explain import explain_client
+
+    try:
+        cliente = store.get_client_features(sk_id_curr)
+    except Exception as erro:
+        raise HTTPException(status_code=503, detail=f"Feature store indisponivel: {erro}")
+    if cliente is None:
+        raise HTTPException(status_code=404, detail=f"Cliente {sk_id_curr} nao encontrado.")
+
+    overrides = simulacao.model_dump(exclude_none=True) if simulacao else {}
+    features = apply_overrides(cliente["features"], overrides) if overrides else cliente["features"]
+
+    try:
+        explicacao = explain_client(features, top_n=top_n)
+    except Exception as erro:
+        raise HTTPException(status_code=500, detail=f"Erro ao explicar: {erro}")
+
+    # Anexa a origem de cada feature: o analista vê não só QUAL variável pesou,
+    # mas de onde ela veio (bureau, parcelas, cadastro...).
+    for contribuicao in explicacao["contributions"]:
+        contribuicao["origem"] = origem_da_feature(contribuicao["feature"])
+
+    return {"SK_ID_CURR": sk_id_curr, **explicacao}
+
+
+@app.get("/model/metrics", tags=["explicabilidade"])
+def metricas_do_modelo() -> dict:
+    """
+    Métricas de discriminação do modelo, medidas out-of-fold.
+
+    Por que out-of-fold e não sobre a base do painel: todos os clientes
+    rotulados foram usados no treino. Reprevê-los daria um AUC otimista (~0,86
+    em vez de 0,79) — um número que o modelo não entrega na vida real. As
+    predições out-of-fold vêm de modelos que NÃO viram aquele cliente.
+    """
+    import numpy as np
+    import pandas as pd
+    from sklearn.metrics import roc_auc_score, roc_curve
+
+    from config import OOF_PREDICTIONS_PATH, TARGET_COLUMN
+
+    meta = model_metadata()
+    resposta = {
+        "auc": meta["oof_auc"],
+        "gini": round(2 * meta["oof_auc"] - 1, 6),
+        "ks": None,
+        "n_obs": None,
+        "n_features": meta["n_features"],
+        "fonte": "model_metadata.json",
+    }
+
+    if os.path.exists(OOF_PREDICTIONS_PATH):
+        oof = pd.read_csv(OOF_PREDICTIONS_PATH)
+        y, p = oof[TARGET_COLUMN].to_numpy(), oof["PD"].to_numpy()
+        fpr, tpr, _ = roc_curve(y, p)
+        auc = float(roc_auc_score(y, p))
+        resposta.update({
+            "auc":   round(auc, 6),
+            "gini":  round(2 * auc - 1, 6),
+            "ks":    round(float(np.max(tpr - fpr)), 6),  # maior separação entre as curvas
+            "n_obs": int(len(y)),
+            "fonte": "oof_predictions.csv",
+        })
+    return resposta
+
+
+# ============================================================
 # AUDITORIA
 # ============================================================
 

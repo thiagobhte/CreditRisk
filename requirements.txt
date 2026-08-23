@@ -47,6 +47,8 @@ psycopg2-binary>=2.9
 # ============================================================
 # Painel e explicabilidade (app/streamlit_app.py + Model/explain.py)
 # ============================================================
+# O painel e um CLIENTE HTTP da API (nao carrega o modelo): precisa do requests.
+requests>=2.31
 # SHAP explica CADA decisão individualmente ("por que este cliente foi
 # recusado?") — a importância nativa do LightGBM só dá a visão média.
 # Atenção: o shap depende do numba, que fixa um teto para a versão do numpy.
