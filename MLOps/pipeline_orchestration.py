@@ -124,48 +124,18 @@ def run_pipeline(with_tuning: bool = False, trials: int = 50, db_limit="auto"):
 
 
 # ============================================================
-# DAG DO AIRFLOW (opcional — só se airflow estiver instalado)
+# E O AIRFLOW?
 # ============================================================
-# Definir a DAG no nível do módulo é o padrão do Airflow: o scheduler importa
-# este arquivo e encontra o objeto `dag`. Protegemos com try/except para que
-# o modo standalone funcione em ambientes sem Airflow.
-
-try:
-    from airflow import DAG
-    from airflow.operators.python import PythonOperator
-    from datetime import datetime, timedelta
-
-    default_args = {
-        "owner": "labdata",
-        "retries": 2,                          # re-executa etapas transitoriamente falhas
-        "retry_delay": timedelta(minutes=5),
-    }
-
-    with DAG(
-        dag_id="credit_risk_pipeline",
-        description="Sanitização → ABT → Treino do modelo de risco de crédito",
-        default_args=default_args,
-        schedule="@daily",                     # re-treina diariamente (ajuste conforme drift)
-        start_date=datetime(2026, 1, 1),
-        catchup=False,
-        tags=["credit-risk", "ml"],
-    ) as dag:
-
-        t_sanitize = PythonOperator(task_id="sanitize",  python_callable=step_sanitize)
-        t_abt      = PythonOperator(task_id="build_abt", python_callable=step_build_abt)
-        t_train    = PythonOperator(task_id="train",     python_callable=step_train)
-        t_load_db  = PythonOperator(task_id="load_feature_store",
-                                    python_callable=step_load_db)
-
-        # O grafo abre em leque depois da ABT: treinar o modelo e publicar as
-        # features no banco são objetivos independentes. Se a carga no banco
-        # falhar, não faz sentido bloquear o treino — e vice-versa.
-        t_sanitize >> t_abt >> [t_train, t_load_db]
-
-except ImportError:
-    # Airflow não instalado — modo standalone continua funcionando normalmente.
-    dag = None
-
+# As DAGs vivem em MLOps/dags/, separadas desta lógica de propósito.
+#
+# Antes a DAG era declarada aqui dentro, protegida por try/except ImportError.
+# Funcionava, mas misturava duas coisas: o QUE fazer (as etapas) e QUANDO/COMO
+# orquestrar. Pior, o scheduler do Airflow importa todo arquivo da pasta de
+# DAGs a cada varredura — e importar este módulo arrastava pandas e lightgbm
+# junto, a cada poucos segundos.
+#
+# Agora as etapas continuam aqui, chamáveis pela CLI, e cada DAG em
+# MLOps/dags/ apenas invoca o comando correspondente.
 
 # ============================================================
 # PONTO DE ENTRADA

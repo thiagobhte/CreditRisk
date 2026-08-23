@@ -110,36 +110,100 @@ docker run --rm busybox ping -c 2 8.8.8.8   # se falhar, o container não tem re
 
 ## 2.1. Airflow — orquestração
 
-A DAG **`credit_risk_pipeline`** vive em [`pipeline_orchestration.py`](pipeline_orchestration.py)
-e é carregada pelo Airflow direto da pasta do projeto
-(`AIRFLOW__CORE__DAGS_FOLDER=/project/MLOps`).
+O Airflow é **onde o pipeline vira rotina**. Sem ele, sanitizar, construir a
+ABT, publicar no banco, pontuar a carteira e monitorar seriam comandos que
+alguém precisa lembrar de rodar, na ordem certa, todo dia.
 
-**Grafo de tasks:**
+### As quatro DAGs
 
+Vivem em [`dags/`](dags/), uma por responsabilidade:
+
+| DAG | Grafo | Agenda |
+|---|---|---|
+| **`credit_risk_ingestion`** | `sanitize → build_abt → load_feature_store` | diária |
+| **`credit_risk_training`** | `train → register_model` | sob demanda |
+| **`credit_risk_batch_scoring`** | `batch_scoring` | diária |
+| **`credit_risk_monitoring`** | `data_drift ∥ prediction_drift ∥ performance` | diária |
+
+**Por que separadas.** Antes havia uma DAG só, com treino no meio da ingestão.
+Mas re-treinar não é rotina diária: gasta horas de CPU e troca um modelo
+estável por outro sem ganho comprovado. Por isso `credit_risk_training` tem
+`schedule=None` — roda quando alguém decide, ou quando o monitoramento
+recomenda. As outras três são rotina.
+
+**Por que o monitoramento roda em paralelo.** A performance por safra depende
+de desfechos que só amadurecem meses depois (*label lag*) e pode não ter o que
+calcular. Em série, essa falta bloquearia justamente o drift — o sinal
+antecipado, o único disponível no curto prazo.
+
+### Como cada task é executada
+
+Toda task é um **comando de terminal**, o mesmo que roda na mão:
+
+```python
+tarefa("performance", "python -m MLOps.monitoring --performance",
+       ambiente=AMBIENTE_PRODUCAO)
 ```
-sanitize  ──►  build_abt  ──►  train
+
+Duas vantagens concretas: qualquer falha é depurável fora do Airflow, e um
+import pesado (pandas, lightgbm) não acontece no processo do scheduler a cada
+varredura de DAGs.
+
+### Demo × produção, no mesmo container
+
+O container roda por padrão em **modo demo**: amostra de 30 mil linhas e saídas
+num volume isolado (`/demo`), para uma execução de demonstração jamais
+sobrescrever a ABT e o modelo treinados na base completa.
+
+Mas scoring e monitoramento precisam do modelo **real** — monitorar um modelo
+de brinquedo não diz nada sobre o que está decidindo de verdade. Essas tasks
+recebem o ambiente de produção explicitamente
+(ver [`dags/_comum.py`](dags/_comum.py)):
+
+```python
+AMBIENTE_PRODUCAO = {"DATA_DIR": "/data", "MODEL_DIR": "/project/Model/artifacts"}
 ```
 
-| Task | O que faz |
-|---|---|
-| `sanitize` | Lê `Dados/raw_data/*.csv` → grava `clean_data.csv` |
-| `build_abt` | Agrega as 7 tabelas → grava `abt.csv` |
-| `train` | Treina o LightGBM (K-Fold) e persiste o modelo em `Model/artifacts/` |
+A carga no banco é **UPSERT**, nunca `TRUNCATE`. Isso não é detalhe: acionar a
+DAG na apresentação com truncate apagaria os 356 mil clientes e deixaria só a
+amostra. Verificado numa execução real — a DAG atualizou 20.532 clientes e
+preservou os 335.719 restantes.
 
-**Como demonstrar:**
-1. `docker compose -f MLOps/docker-compose.yml up -d --build airflow`
-2. Abra `http://localhost:8081` e faça login (**admin / admin**)
-3. Ative a DAG `credit_risk_pipeline` e clique em **Trigger**
-4. Acompanhe as tasks ficando verdes na aba *Graph*
+### Metastore em PostgreSQL
 
-> **Modo demo:** a variável `NUM_ROWS=30000` no compose faz a DAG rodar sobre
-> uma **amostra** (~2 min). Remova-a para processar a base completa (~15 min) —
-> tempo demais para uma apresentação ao vivo.
+O Airflow guarda em banco todo o seu estado: DAGs, execuções, estado de cada
+task, usuários. Com o `airflow standalone` (SQLite) esse estado morria junto
+com o container, e o SQLite só admite o **SequentialExecutor** — uma task por
+vez, o que transforma o grafo em leque do monitoramento numa fila.
 
-**Sobre a arquitetura escolhida:** o container roda `airflow standalone`
-(SQLite + SequentialExecutor), suficiente para demonstrar a orquestração. Em
-produção, trocaríamos por **Postgres como metastore** e **CeleryExecutor ou
-KubernetesExecutor** para paralelizar as tasks e escalar horizontalmente.
+Agora o metastore é um banco `airflow` separado, na mesma instância Postgres, e
+o executor é o **LocalExecutor**. Medido numa execução real: as três tasks de
+monitoramento começaram no mesmo instante (`21:34:27.07`, `.08`, `.10`).
+
+Compartilhar a instância é uma escolha de custo, adequada a este porte. Em
+produção seriam servidores distintos, para uma carga de orquestração não
+disputar recursos com as consultas do serviço de predição — e o executor seria
+Celery ou Kubernetes, para distribuir tasks entre máquinas.
+
+### Como demonstrar
+
+```bash
+docker compose -f MLOps/docker-compose.yml up -d --build airflow
+# UI → http://localhost:8081   (admin / admin)
+```
+
+1. Ative a DAG `credit_risk_monitoring` e clique em **Trigger**
+2. Aba *Graph*: as três tasks ficam verdes **ao mesmo tempo**
+3. O resultado aparece no painel, em *Monitoramento* → http://localhost:8501
+
+Tempos reais medidos: ingestão completa em **2 min**; monitoramento em **4 s**;
+scoring de 2.000 clientes em **1 s**.
+
+> **Se o volume do Postgres foi criado antes desta versão**, os scripts de init
+> não rodam de novo. Crie o banco do Airflow uma vez:
+> ```bash
+> docker compose -f MLOps/docker-compose.yml exec postgres >   psql -U creditrisk -d creditrisk -f /docker-entrypoint-initdb.d/00_airflow_metastore.sql
+> ```
 
 O mesmo pipeline também roda **sem Airflow**, em modo sequencial
 (`python -m MLOps.pipeline_orchestration`) — útil em CI ou num cron simples.

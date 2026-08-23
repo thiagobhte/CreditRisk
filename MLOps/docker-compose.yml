@@ -61,8 +61,14 @@ services:
   # ----------------------------------------------------------
   # Airflow — orquestração do pipeline (UI + scheduler)
   # ----------------------------------------------------------
-  # Modo standalone: SQLite + SequentialExecutor, num único container.
-  # Suficiente para demonstrar a DAG; em produção usaria Postgres + Celery/K8s.
+  # Metastore em POSTGRES (não SQLite) e LocalExecutor (não Sequential):
+  #   * com SQLite o estado do Airflow morria junto com o container e só o
+  #     SequentialExecutor era possível — uma task por vez, o que transforma o
+  #     grafo em leque do monitoramento numa fila;
+  #   * com Postgres o histórico de execuções sobrevive ao `compose down` e as
+  #     tasks independentes rodam de fato em paralelo.
+  # O próximo degrau seria CeleryExecutor ou KubernetesExecutor, para distribuir
+  # as tasks entre máquinas — desnecessário neste porte.
   airflow:
     build:
       context: ..
@@ -74,9 +80,17 @@ services:
       # demonstração ao vivo é o tipo de erro que dá para evitar de graça.
       - "8081:8080"
     environment:
-      # A DAG mora junto do código do projeto, não em /opt/airflow/dags
-      AIRFLOW__CORE__DAGS_FOLDER: /project/MLOps
+      # As DAGs moram numa pasta dedicada do projeto. Antes o DAGS_FOLDER
+      # apontava para MLOps/ inteiro, e o scheduler reimportava monitoring.py e
+      # pipeline_orchestration.py (com pandas e lightgbm juntos) a cada varredura.
+      AIRFLOW__CORE__DAGS_FOLDER: /project/MLOps/dags
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      # Metastore em Postgres, no banco `airflow` (separado do `creditrisk`)
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # Teto de tasks simultaneas: o LocalExecutor abre um processo por task,
+      # e cada uma carrega pandas/lightgbm. Quatro cabe numa maquina de demo.
+      AIRFLOW__CORE__PARALLELISM: "4"
       # PYTHONPATH: permite que as tasks importem config, DataPipeline e Model
       PYTHONPATH: /project
       # ISOLAMENTO: a DAG lê os CSVs brutos (read-only) mas escreve tudo —
@@ -99,6 +113,9 @@ services:
       - ../:/project
       - airflow_demo:/demo                 # saídas da demo (isoladas)
       - ../Dados/raw_data:/demo/raw_data:ro # dados brutos, somente leitura
+      # Dados de PRODUÇÃO, somente leitura: as tasks de scoring e monitoramento
+      # precisam do oof_predictions.csv e da base real (ver MLOps/dags/_comum.py)
+      - ../Dados:/data:ro
     # Script explícito: db migrate → cria admin → scheduler + webserver.
     # (Encadear isso inline no YAML com && e & é frágil — ver o script.)
     command: ["bash", "/project/MLOps/airflow-entrypoint.sh"]

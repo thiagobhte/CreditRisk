@@ -613,42 +613,6 @@ def serie_performance(limite: int = 50) -> list:
 
 
 # ============================================================
-# DAG DO AIRFLOW (opcional — só se airflow estiver instalado)
-# ============================================================
-
-try:
-    from airflow import DAG
-    from airflow.operators.python import PythonOperator
-    from datetime import datetime, timedelta
-
-    with DAG(
-        dag_id="credit_risk_monitoring",
-        description="Drift de dados, drift de predicoes e performance por safra",
-        default_args={"owner": "labdata", "retries": 1,
-                      "retry_delay": timedelta(minutes=5)},
-        schedule="@daily",              # o monitoramento roda todo dia
-        start_date=datetime(2026, 1, 1),
-        catchup=False,
-        tags=["credit-risk", "monitoring"],
-    ) as dag_monitoring:
-
-        t_data = PythonOperator(task_id="data_drift",
-                                python_callable=lambda: rodar_data_drift())
-        t_pred = PythonOperator(task_id="prediction_drift",
-                                python_callable=lambda: rodar_prediction_drift())
-        t_perf = PythonOperator(task_id="performance",
-                                python_callable=lambda: rodar_performance())
-
-        # As três camadas são independentes: uma falha de performance (por falta
-        # de labels maduros) não pode impedir a checagem de drift, que é
-        # justamente o sinal antecipado.
-        [t_data, t_pred, t_perf]
-
-except ImportError:
-    dag_monitoring = None
-
-
-# ============================================================
 # CLI
 # ============================================================
 
