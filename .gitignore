@@ -39,6 +39,9 @@ drift_report.json
 # Enunciado do trabalho (especificação da atividade, não é entregável)
 /ProjetoFinal_v2.pdf
 
+# Anotações pessoais de trabalho (repositório é público)
+/perguntas professora.txt
+
 # Observação: Model/artifacts/ (modelo treinado) É versionado de propósito,
 # para que a API/predict funcionem sem precisar re-treinar. São ~4 MB.
 
