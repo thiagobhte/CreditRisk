@@ -66,8 +66,12 @@ acerta 92% e não agrega valor), por isso a métrica-guia é o **AUC-ROC**.
    - `Model/kpi_analysis.ipynb`: tradução das predições em indicadores de negócio (inadimplência evitada, resultado líquido, corte ótimo).
 
 5. **Deploy e MLOps** (`Model/predict.py`, `app/`, `MLOps/`).
-   O modelo treinado é servido por uma **API (FastAPI)** e um **painel (Streamlit)**,
-   orquestrado pelo **Airflow** e monitorado por detecção de drift (PSI).
+   A ABT é publicada numa **feature store em PostgreSQL**, de onde a **API
+   (FastAPI)** lê as features de cada cliente na hora da decisão. O **painel
+   (Streamlit)** consome a API, o **Airflow** orquestra as quatro DAGs
+   (ingestão, treino, scoring em lote e monitoramento) e cada decisão fica
+   registrada para auditoria. O monitoramento cobre três camadas: drift de
+   dados (PSI), drift de predições e performance por safra (AUC/KS/Gini).
 
 ---
 
@@ -99,17 +103,27 @@ CreditRisk/
 │
 ├── app/
 │   ├── main.py                    → API REST de predição (FastAPI)
-│   └── streamlit_app.py           → painel de decisão com explicabilidade (SHAP)
+│   ├── streamlit_app.py           → painel de decisão com explicabilidade (SHAP)
+│   └── pages/1_Monitoramento.py   → painel de monitoramento (drift e performance)
 │
 ├── MLOps/
-│   ├── README.md                  → arquitetura, monitoramento e ações automatizadas
-│   ├── docker-compose.yml         → infraestrutura (airflow + API + Streamlit + pipeline + monitoramento)
+│   ├── README.md                  → arquitetura (diagramas), monitoramento e ações automatizadas
+│   ├── sql/schema.sql             → modelo de dados: 4 schemas, 7 tabelas, 2 visões
+│   ├── db.py                      → conexão única com o PostgreSQL
+│   ├── store.py                   → leitura da feature store e log de decisões
+│   ├── load_to_db.py              → publica a ABT no banco (COPY + UPSERT)
+│   ├── batch_scoring.py           → pontuação da carteira em lote
+│   ├── simulate_production.py     → gera tráfego para o monitoramento observar
+│   ├── data_dictionary.py         → gera o dicionário de dados a partir do banco
+│   ├── dags/                      → as 4 DAGs do Airflow
+│   ├── docker-compose.yml         → infraestrutura (postgres + airflow + API + Streamlit + jobs)
 │   ├── Dockerfile.offline         → build sem internet (redes corporativas)
 │   ├── airflow.Dockerfile         → imagem do Airflow com as dependências de ML
 │   ├── requirements-airflow.txt   → dependências das tasks da DAG
-│   ├── pipeline_orchestration.py  → DAG do Airflow + orquestração standalone
-│   └── monitoring.py              → monitoramento de drift de dados (PSI)
+│   ├── pipeline_orchestration.py  → orquestração standalone (sem Airflow)
+│   └── monitoring.py              → drift de dados, drift de predições e performance
 │
+├── DICIONARIO_DE_DADOS.md         → dicionário gerado a partir do catálogo do banco
 ├── Dockerfile                     → imagem única (API + pipeline)
 ├── config.py                      → variáveis, caminhos e parâmetros globais do projeto
 ├── requirements.txt               → dependências do projeto
@@ -289,9 +303,23 @@ docker compose -f MLOps/docker-compose.yml up -d --build streamlit  # Painel  �
 docker compose -f MLOps/docker-compose.yml up -d --build airflow    # Airflow → http://localhost:8081  (admin/admin)
 ```
 
-👉 A **arquitetura completa** (diagrama + componentes), a orquestração via **Airflow**,
-o **monitoramento de drift (PSI)** e as **ações automatizadas + agentes de IA** estão
-documentadas em **[MLOps/README.md](MLOps/README.md)**.
+```bash
+docker compose -f MLOps/docker-compose.yml up -d postgres        # banco da solução
+```
+
+👉 A **arquitetura completa** está em **[MLOps/README.md](MLOps/README.md)**, com
+três diagramas: **componentes** (quem fala com quem), **sequência** (o que o
+código faz do clique à decisão) e **modelo de dados** (as 7 tabelas). Lá também
+estão a orquestração via **Airflow**, o **monitoramento** em três camadas e as
+**ações automatizadas + agentes de IA**.
+
+O **dicionário de dados** — cada tabela, coluna, chave e índice — está em
+**[DICIONARIO_DE_DADOS.md](DICIONARIO_DE_DADOS.md)**, gerado a partir do
+catálogo do banco:
+
+```bash
+python -m MLOps.data_dictionary --output DICIONARIO_DE_DADOS.md
+```
 
 ---
 
