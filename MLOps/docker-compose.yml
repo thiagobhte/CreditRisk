@@ -88,6 +88,13 @@ services:
       # Demo rápida: a DAG roda numa amostra (~2-3 min) em vez da base completa
       # (~25 min) — tempo demais para uma apresentação ao vivo.
       NUM_ROWS: "30000"
+      # A task load_feature_store publica a ABT no banco da aplicação (que é
+      # compartilhado, e não isolado como o /demo: a API precisa ler de lá).
+      DB_HOST: postgres
+      ABT_LOAD_LIMIT: "20000"
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ../:/project
       - airflow_demo:/demo                 # saídas da demo (isoladas)

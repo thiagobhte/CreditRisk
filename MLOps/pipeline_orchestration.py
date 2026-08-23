@@ -3,7 +3,8 @@ pipeline_orchestration.py — Orquestração ponta-a-ponta do pipeline de ML.
 
 Encadeia as etapas na ordem correta:
 
-    raw_data ─► data_sanitization ─► abt_transform ─► (tune) ─► train ─► modelo
+    raw_data ─► data_sanitization ─► abt_transform ─┬─► (tune) ─► train ─► modelo
+                                                    └─► load_to_db ─► PostgreSQL
 
 Dois modos de execução:
 
@@ -56,11 +57,32 @@ def step_train():
     run()
 
 
+def step_load_db(limite="auto"):
+    """
+    Publica a ABT recém-construída no PostgreSQL (feature store).
+
+    É o elo que faltava entre o pipeline e o serviço de predição: sem esta
+    etapa, a API não teria de onde ler as features de um cliente. Roda depois
+    da ABT e em paralelo ao treino — uma coisa não depende da outra.
+
+    O default é "auto" (e não None) de propósito: o Airflow chama esta função
+    sem argumentos, e um None seria interpretado como "carregue a base inteira"
+    — 356 mil clientes, mais de 5 GB no banco, no meio de uma demonstração.
+    Com "auto", vale o ABT_LOAD_LIMIT do ambiente. Passe None explicitamente
+    para carregar tudo.
+    """
+    from MLOps.load_to_db import load_abt, load_clean, DEFAULT_LIMIT
+    if limite == "auto":
+        limite = DEFAULT_LIMIT
+    load_clean(limite=limite, truncate=True)
+    load_abt(limite=limite, truncate=True)
+
+
 # ============================================================
 # ORQUESTRAÇÃO STANDALONE
 # ============================================================
 
-def run_pipeline(with_tuning: bool = False, trials: int = 50):
+def run_pipeline(with_tuning: bool = False, trials: int = 50, db_limit="auto"):
     """
     Executa o pipeline completo em sequência.
 
@@ -74,6 +96,7 @@ def run_pipeline(with_tuning: bool = False, trials: int = 50):
     if with_tuning:
         steps.append(("Tuning de hiperparâmetros", lambda: step_tune(trials)))
     steps.append(("Treino + persistência do modelo", step_train))
+    steps.append(("Carga da ABT no PostgreSQL", lambda: step_load_db(db_limit)))
 
     # Só ASCII nas mensagens: o console do Windows usa cp1252 e estoura
     # UnicodeEncodeError em caracteres como "→", "✅" e "❌".
@@ -129,9 +152,13 @@ try:
         t_sanitize = PythonOperator(task_id="sanitize",  python_callable=step_sanitize)
         t_abt      = PythonOperator(task_id="build_abt", python_callable=step_build_abt)
         t_train    = PythonOperator(task_id="train",     python_callable=step_train)
+        t_load_db  = PythonOperator(task_id="load_feature_store",
+                                    python_callable=step_load_db)
 
-        # Encadeia as dependências: define o grafo (a "seta" do diagrama)
-        t_sanitize >> t_abt >> t_train
+        # O grafo abre em leque depois da ABT: treinar o modelo e publicar as
+        # features no banco são objetivos independentes. Se a carga no banco
+        # falhar, não faz sentido bloquear o treino — e vice-versa.
+        t_sanitize >> t_abt >> [t_train, t_load_db]
 
 except ImportError:
     # Airflow não instalado — modo standalone continua funcionando normalmente.
@@ -148,6 +175,11 @@ if __name__ == "__main__":
                         help="Inclui a etapa de tuning (Optuna) antes do treino")
     parser.add_argument("--trials", type=int, default=50,
                         help="Nº de trials do Optuna, se --with-tuning (padrão: 50)")
+    parser.add_argument("--db-limit", type=int, default=None,
+                        help="Quantos clientes publicar no banco (padrão: ABT_LOAD_LIMIT)")
+    parser.add_argument("--db-full", action="store_true",
+                        help="Publica a base COMPLETA no banco (lento, +5 GB)")
     args = parser.parse_args()
 
-    run_pipeline(with_tuning=args.with_tuning, trials=args.trials)
+    db_limit = None if args.db_full else (args.db_limit if args.db_limit is not None else "auto")
+    run_pipeline(with_tuning=args.with_tuning, trials=args.trials, db_limit=db_limit)
