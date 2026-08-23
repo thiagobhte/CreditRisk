@@ -53,7 +53,7 @@ from sqlalchemy import text
 
 from config import (
     ABT_DATA_PATH, CLEAN_DATA_PATH, DEMO_CLIENTS_PATH, MODEL_FEATURES_PATH,
-    DB_CHUNK_SIZE, ID_COLUMN, TARGET_COLUMN,
+    DB_CHUNK_SIZE, ID_COLUMN, TARGET_COLUMN, NUM_ROWS,
 )
 from MLOps.db import get_engine
 
@@ -204,18 +204,40 @@ def _ids_da_demo() -> set:
 
 
 def load_abt(limite: int = None, truncate: bool = False,
-             incluir_demo: bool = True, versao: str = None) -> int:
+             incluir_demo: bool = True, versao: str = None,
+             permitir_amostra: bool = False) -> int:
     """
     Carrega a ABT em `feature_store.abt`.
 
     Grava apenas as 836 features que o modelo usa — o que sobra na ABT (IDs
     auxiliares, colunas descartadas no treino) não tem utilidade na inferência
     e só ocuparia espaço.
+
+    TRAVA DE SEGURANÇA (`permitir_amostra`): a carga se recusa a publicar uma
+    ABT construída sobre AMOSTRA. Isso não é zelo abstrato — aconteceu:
+
+        uma execução de demonstração da DAG rodou com NUM_ROWS=30000, que corta
+        CADA tabela de origem. As agregações de bureau e de aplicações
+        anteriores saíram vazias, e o UPSERT gravou isso por cima dos valores
+        completos. O cliente 100002 caiu de 658 para 243 features, e a sua PD
+        pulou de 0,346 para 0,457 — sem que nada no sistema acusasse.
+
+    Uma ABT de amostra serve para testar o pipeline, nunca para servir decisões.
     """
     if not os.path.exists(ABT_DATA_PATH):
         raise FileNotFoundError(
             f"ABT não encontrada em {ABT_DATA_PATH}. "
             f"Gere primeiro com: python -m DataPipeline.abt_transform"
+        )
+
+    if NUM_ROWS and not permitir_amostra:
+        raise RuntimeError(
+            f"Recusando publicar uma ABT de AMOSTRA na feature store.\n"
+            f"  NUM_ROWS={NUM_ROWS} está definido, então esta ABT foi construída sobre um\n"
+            f"  recorte de cada tabela de origem: os clientes sairiam sem o histórico de\n"
+            f"  bureau, parcelas e aplicações anteriores, e o UPSERT sobrescreveria os\n"
+            f"  valores completos que já estão no banco.\n"
+            f"  Para publicar mesmo assim (ambiente de teste): --permitir-amostra"
         )
     with open(MODEL_FEATURES_PATH, "r", encoding="utf-8") as f:
         features = json.load(f)
@@ -373,6 +395,8 @@ def _run_cli() -> int:
     parser.add_argument("--full",     action="store_true", help="carrega a base completa (sem limite)")
     parser.add_argument("--limit",    type=int, default=DEFAULT_LIMIT,
                         help=f"quantos registros carregar (padrao: {DEFAULT_LIMIT:,})")
+    parser.add_argument("--permitir-amostra", action="store_true",
+                        help="publica mesmo com NUM_ROWS definido (ABT de amostra)")
     args = parser.parse_args()
 
     if not (args.abt or args.clean):
@@ -384,7 +408,8 @@ def _run_cli() -> int:
     if args.clean:
         load_clean(limite=limite, truncate=args.truncate)
     if args.abt:
-        load_abt(limite=limite, truncate=args.truncate)
+        load_abt(limite=limite, truncate=args.truncate,
+                 permitir_amostra=args.permitir_amostra)
 
     print("\nEstado do banco:")
     for chave, valor in resumo().items():

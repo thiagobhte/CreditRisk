@@ -457,23 +457,113 @@ quando há drift severo → a DAG do Airflow (ou um cron) dispara o
 
 ## 4. Ações automatizadas + agentes de IA (item iv)
 
-A previsão não é o fim — ela **aciona decisões de negócio**:
+> **Esta seção é uma proposta**, não um componente implementado. O enunciado
+> pede para *propor* as ações que poderiam ser acionadas a partir das previsões;
+> o que está em produção neste repositório é tudo que vem antes: a decisão, o
+> registro dela e o monitoramento. O que segue é o desenho de como essa decisão
+> viraria ação, e o que já existe no código para sustentá-lo.
 
-| Faixa (PD) | Decisão automática | Ação acionada |
+### 4.1. O problema que a automação resolve
+
+Hoje a solução entrega uma decisão: `APROVAR`, `ANALISE_MANUAL` ou `RECUSAR`.
+Entre essa decisão e o efeito no negócio ainda há uma pessoa: alguém lê a tela,
+abre outro sistema, libera o crédito ou escreve para o cliente.
+
+Esse intervalo custa de três formas. **Tempo:** uma aprovação de baixo risco que
+espera dois dias na fila é uma venda que o concorrente fecha antes. **Consistência:**
+dois analistas diante do mesmo `ANALISE_MANUAL` decidem diferente, e a política
+vira folclore. **Receita silenciosa:** cerca de 3% dos pedidos são recusados
+automaticamente, e ninguém pergunta se aquele cliente caberia num valor menor.
+
+### 4.2. As ações propostas, por faixa de decisão
+
+| Faixa (PD) | Decisão | Ações automatizadas propostas |
 |---|---|---|
-| `< 0.08` (BAIXO) | **APROVAR** | Crédito liberado automaticamente; e-mail de boas-vindas |
-| `0.08–0.30` (MODERADO/ALTO) | **ANÁLISE MANUAL** | Cria ticket para o analista com as features de maior peso (SHAP) |
-| `> 0.30` (MUITO ALTO) | **RECUSAR** | Recusa automática + oferta alternativa (limite menor / garantia) |
+| `< 8%` | **APROVAR** | Liberar o crédito no sistema de originação · notificar o cliente · registrar a decisão com a versão do modelo |
+| `8% – 30%` | **ANÁLISE MANUAL** | Abrir ticket para a mesa de crédito **já com a explicação SHAP anexada** · priorizar a fila por valor e por proximidade do corte · anexar o histórico do cliente |
+| `> 30%` | **RECUSAR** | Antes de comunicar: procurar uma **oferta alternativa viável** · se não houver, registrar a recusa com a justificativa · alimentar a régua de reanálise futura |
 
-### Agentes de IA no fluxo
-- **Agente de explicação:** para casos de análise manual, um LLM recebe as
-  top features (SHAP) e gera um resumo em linguagem natural do *porquê* do risco,
-  acelerando a decisão do analista e apoiando a **explicabilidade regulatória**.
-- **Agente de retenção:** para clientes recusados de baixo-moderado risco, propõe
-  automaticamente um produto alternativo viável.
-- **Agente de monitoramento:** interpreta o `drift_report.json`, resume em
-  linguagem natural quais features driftaram e abre um incidente com a
-  recomendação (re-treinar / investigar fonte de dados).
+A ação mais valiosa é a da faixa de recusa, e ela merece detalhe.
 
-Todas as decisões automáticas são **logadas** (entrada, PD, decisão, versão do
-modelo) para auditoria e conformidade (governança).
+### 4.3. A ação com maior retorno: oferta alternativa
+
+A recusa quase nunca é sobre a **pessoa** — é sobre o **valor pedido**. O mesmo
+cliente, pedindo menos, frequentemente cabe na política.
+
+Isso é uma **busca sobre o modelo**, não uma regra fixa: varia o valor do
+crédito (com a parcela ajustada na mesma proporção, senão a proposta não existe
+no mundo real), reavalia o cliente a cada passo e encontra o maior valor cuja PD
+ainda fica abaixo do corte de aprovação. Uma busca binária resolve em ~12
+iterações.
+
+O projeto **já tem as duas peças necessárias** para isso:
+
+- `Model.predict.apply_overrides()` altera variáveis e **recalcula as 9 features
+  derivadas** afetadas — é o que garante que o cliente simulado seja coerente;
+- `POST /predict/{id}` já aceita exatamente esse tipo de simulação, e o painel
+  já demonstra a PD mudando quando o valor muda.
+
+Falta apenas o laço de busca e o disparo da oferta. **É deliberadamente o que
+não foi implementado:** o enunciado pede a proposta, e implementar a ação sem
+um sistema de originação real para receber a oferta produziria uma tabela de
+"ofertas simuladas" que ninguém consome.
+
+### 4.4. Onde entrariam os agentes de IA
+
+Três agentes, cada um resolvendo uma pergunta que um número sozinho não responde.
+
+**Agente de explicação — "por que este cliente foi recusado?"**
+Recebe as contribuições SHAP que a API **já calcula** (`POST /explain/{id}`) e
+escreve a justificativa em linguagem de negócio: *"o que mais pesou contra foram
+os scores de bureau externo e o comprometimento da renda com a parcela; a favor,
+o tempo de emprego"*. Serve ao analista, ao atendimento e à exigência
+regulatória de justificar a recusa. É o caso de uso mais direto de um LLM aqui,
+porque o trabalho é de **redação**: os fatos já estão apurados.
+
+**Agente de retenção — "existe crédito que este cliente conseguiria pagar?"**
+Interpreta o resultado da busca da seção 4.3 e redige a contraproposta. A
+inteligência dura está na busca sobre o modelo; o agente traduz o número em
+oferta comunicável.
+
+**Agente de monitoramento — "o que está acontecendo, e o que eu faço?"**
+Lê `mlops.monitoring_runs` e transforma a tabela de PSI e AUC no parágrafo que
+alguém de plantão precisa às 3h da manhã: o que mudou, quão grave é, e qual a
+próxima ação. Hoje o monitoramento produz o dado certo — *6 variáveis com drift
+severo, safra com AUC 0,713 abaixo do limite de 0,751* — mas quem recebe isso
+precisa saber ler PSI. O agente fecha essa distância.
+
+### 4.5. Limites que a proposta assume
+
+Ser honesto sobre isso é parte da proposta:
+
+- **LLM erra, e crédito é regulado.** O agente redige a justificativa a partir
+  dos valores SHAP, mas **não decide nada** — a decisão continua vindo do modelo
+  e da política de corte. O texto gerado precisa de revisão amostral, e a
+  decisão auditável é a que está em `serving.predictions`, não a redação.
+- **Dependência externa numa operação crítica.** Um LLM em serviço síncrono de
+  crédito adiciona latência e um ponto de falha de terceiro. O desenho correto é
+  assíncrono: a decisão sai na hora, o texto chega depois.
+- **Custo por chamada.** Gerar texto para 100% das decisões é caro sem
+  necessidade. Só a faixa de análise manual e as recusas justificam o gasto —
+  aprovações de baixo risco não precisam de redação.
+
+### 4.6. O que já existe para sustentar tudo isso
+
+A proposta não parte do zero. As fundações estão implementadas e testadas:
+
+| Fundação | Onde | Estado |
+|---|---|---|
+| Decisão traduzida em faixa de negócio | [`Model/predict.py`](../Model/predict.py) | ✅ |
+| Explicação individual (SHAP) exposta por API | [`app/main.py`](../app/main.py) · `POST /explain/{id}` | ✅ |
+| Simulação coerente (recalcula derivadas) | `Model.predict.apply_overrides()` | ✅ |
+| Log auditável de toda decisão | `serving.predictions` | ✅ |
+| Rastreabilidade do modelo que decidiu | `mlops.model_registry` (FK) | ✅ |
+| Sinal de monitoramento estruturado | `mlops.monitoring_runs` | ✅ |
+| Agendamento para rodar as ações | Airflow, [`dags/`](dags) | ✅ |
+| **Motor de ações e agentes** | — | **proposta** |
+
+Toda decisão automática já é registrada com entrada, PD, decisão, versão do
+modelo e latência. Governança e auditoria não são um passo futuro: são a base
+sobre a qual a automação poderia ser ligada com segurança.
+
+---
