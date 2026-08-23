@@ -36,6 +36,15 @@ uvicorn[standard]>=0.29
 pydantic>=2.0
 
 # ============================================================
+# Banco de dados (MLOps/db.py, carga da ABT, log de predições)
+# ============================================================
+# SQLAlchemy 2.x é a interface única de acesso ao Postgres no projeto.
+# psycopg2-binary traz o driver já compilado — evita precisar de libpq-dev e
+# compilador na imagem Docker (que é python:3.11-slim).
+sqlalchemy>=2.0
+psycopg2-binary>=2.9
+
+# ============================================================
 # Painel e explicabilidade (app/streamlit_app.py + Model/explain.py)
 # ============================================================
 # SHAP explica CADA decisão individualmente ("por que este cliente foi

@@ -34,6 +34,37 @@ CLEAN_DATA_PATH  = os.path.join(DATA_DIR, "clean_data.csv")
 ABT_DATA_PATH    = os.path.join(DATA_DIR, "abt.csv")
 
 # ============================================================
+# BANCO DE DADOS (PostgreSQL)
+# ============================================================
+# A partir da versão com persistência em banco, os CSVs deixam de ser o destino
+# final do pipeline: eles continuam sendo gerados (rastreabilidade e uso nos
+# notebooks), mas a ABT também é carregada no Postgres, de onde a API lê as
+# features de cada cliente na hora da inferência.
+#
+# Os defaults abaixo apontam para o serviço `postgres` do docker-compose. Fora
+# do Docker (rodando no host), sobrescreva DB_HOST=localhost.
+DB_HOST     = os.environ.get("DB_HOST", "postgres")
+DB_PORT     = os.environ.get("DB_PORT", "5432")
+DB_NAME     = os.environ.get("DB_NAME", "creditrisk")
+DB_USER     = os.environ.get("DB_USER", "creditrisk")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "creditrisk")
+
+# DATABASE_URL tem precedência: é a forma padrão de apontar a aplicação para
+# outro banco (staging, produção, um Postgres gerenciado) sem tocar no código.
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}",
+)
+
+# DDL do banco. Fica versionado junto ao código (não em /Dados) porque o schema
+# é parte da aplicação, não um dado.
+SCHEMA_SQL_PATH = os.path.join(PROJECT_ROOT, "MLOps", "sql", "schema.sql")
+
+# Tamanho do lote nas cargas para o banco. A ABT tem 836 features por linha;
+# lotes grandes demais estouram a memória do driver ao montar o INSERT.
+DB_CHUNK_SIZE = int(os.environ.get("DB_CHUNK_SIZE", "5000"))
+
+# ============================================================
 # PARÂMETROS DO PIPELINE
 # ============================================================
 # num_rows=None carrega tudo; defina um inteiro (ex: 10000) para debug rápido.
