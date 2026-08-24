@@ -533,20 +533,26 @@ próxima ação. Hoje o monitoramento produz o dado certo — *6 variáveis com 
 severo, safra com AUC 0,713 abaixo do limite de 0,751* — mas quem recebe isso
 precisa saber ler PSI. O agente fecha essa distância.
 
-### 4.5. Limites que a proposta assume
+### 4.5. Onde essa proposta pode dar errado
 
-Ser honesto sobre isso é parte da proposta:
+Três coisas me preocupam nela, e prefiro dizer antes que perguntem.
 
-- **LLM erra, e crédito é regulado.** O agente redige a justificativa a partir
-  dos valores SHAP, mas **não decide nada** — a decisão continua vindo do modelo
-  e da política de corte. O texto gerado precisa de revisão amostral, e a
-  decisão auditável é a que está em `serving.predictions`, não a redação.
-- **Dependência externa numa operação crítica.** Um LLM em serviço síncrono de
-  crédito adiciona latência e um ponto de falha de terceiro. O desenho correto é
-  assíncrono: a decisão sai na hora, o texto chega depois.
-- **Custo por chamada.** Gerar texto para 100% das decisões é caro sem
-  necessidade. Só a faixa de análise manual e as recusas justificam o gasto —
-  aprovações de baixo risco não precisam de redação.
+**A primeira é que LLM erra, e crédito é uma atividade regulada.** Por isso o
+agente escreve, mas não decide. Quem decide continua sendo o modelo e a política
+de corte; o agente só transforma os valores SHAP em uma frase que uma pessoa
+entende. Se ele escrever algo torto, a decisão que vale é a que está gravada em
+`serving.predictions`, não a redação. Ainda assim, um texto que vai para o
+cliente precisa de revisão por amostragem.
+
+**A segunda é a dependência de um serviço externo bem no meio da operação.**
+Colocar uma chamada de LLM dentro do fluxo de decisão significa herdar a
+latência dele e o dia em que ele estiver fora do ar. Não vale a pena: a decisão
+sai na hora, como já sai hoje, e o texto chega depois. Assíncrono resolve.
+
+**A terceira é o custo.** Gerar texto para toda decisão é caro sem motivo. As
+aprovações de baixo risco não precisam de redação nenhuma — ninguém pede
+explicação quando o crédito é liberado. Vale a pena escrever nos casos que
+alguém vai ler: a faixa de análise manual e as recusas.
 
 ### 4.6. O que já existe para sustentar tudo isso
 
@@ -571,66 +577,74 @@ sobre a qual a automação poderia ser ligada com segurança.
 
 ## 5. Próximos passos de desenvolvimento
 
-O que ficou de fora e por quê. A ordem é de prioridade, não de esforço.
+O que ficou de fora, e por quê. Está em ordem de prioridade, não de esforço.
 
 ### 5.1. O motor de ações (item iv)
 
-É o passo mais próximo do negócio e o único descrito em detalhe neste
-documento — a seção 4 inteira existe para isso. Foi deixado como proposta de
-propósito: sem um sistema de originação real para receber a oferta, o motor
-gravaria decisões numa tabela que ninguém consome.
+É o passo mais perto do negócio, e a seção 4 inteira existe para descrevê-lo.
+Ficou como proposta de propósito: sem um sistema de originação de verdade para
+receber a oferta, o motor gravaria decisões numa tabela que ninguém lê.
 
 ### 5.2. Re-treino disparado pelo monitoramento
 
-Hoje a DAG `credit_risk_training` está **pausada e é manual**, e isso é uma
-escolha: trocar o modelo que decide crédito é decisão de negócio, não de
-agendador. O monitoramento já produz o sinal (`retrain_recommended` em
-`mlops.monitoring_runs`) — falta o elo que transforma esse sinal em uma
-execução com aprovação humana no meio: alerta → revisão → promoção no registry.
+A DAG `credit_risk_training` está pausada e só roda no braço. Isso é escolha,
+não esquecimento: trocar o modelo que decide crédito é decisão de negócio, não
+de agendador.
 
-### 5.3. Treino reproduzível bit a bit
+O sinal para re-treinar já existe — o monitoramento grava
+`retrain_recommended` em `mlops.monitoring_runs`. O que falta é o caminho entre
+o sinal e a troca, com uma pessoa no meio: o alerta chega, alguém olha, e só
+então a nova versão é promovida no registry.
 
-O pipeline de dados já é determinístico: reconstruir a ABT do zero gera um
-arquivo com o **mesmo SHA-256**. O treino não é — com `n_jobs=-1`, a construção
-paralela dos histogramas desloca o ponto de parada do early stopping, e o
-mesmo comando produz 2.319 ou 2.366 árvores (AUC 0,790922 contra 0,790986).
+### 5.3. Treino que reproduz igual
 
-A diferença é irrelevante para a decisão, mas atrapalha auditoria: não dá para
-provar que o artefato em produção veio exatamente daquele commit. Fixar
-`n_jobs=1` no treino final resolve, ao custo de tempo de máquina.
+O pipeline de dados reproduz bit a bit. Se você reconstruir a ABT do zero, o
+arquivo sai com o mesmo SHA-256 do que está em produção. Testei.
 
-### 5.4. Features calculadas sob demanda
+O treino não. Com `n_jobs=-1`, o LightGBM monta os histogramas em paralelo e o
+early stopping para num ponto ligeiramente diferente a cada execução: o mesmo
+comando gerou 2.319 árvores numa vez e 2.366 na outra, com AUC 0,790922 contra
+0,790986.
 
-A API responde em milissegundos porque **lê** as 836 features do banco por
-chave primária — não as recalcula. O limite aparece no cliente que ainda não
-está na feature store: ele não pode ser pontuado até a próxima carga.
+Para a decisão isso não muda nada, a diferença está na quinta casa. Mas atrapalha
+auditoria, porque não dá para provar que o arquivo em produção nasceu daquele
+commit exato. Fixar `n_jobs=1` no treino final resolve, e custa tempo de máquina.
 
-O passo seguinte é uma camada que agregue o histórico bruto sob demanda para
-esses casos, mantendo a leitura direta como caminho rápido para quem já existe.
+### 5.4. Pontuar quem ainda não está no banco
 
-### 5.5. Registry com métricas e dados versionados
+A API responde em milissegundos porque lê as 836 features prontas, por chave
+primária. Ela não calcula nada na hora — e é justamente aí que aparece o limite:
+um cliente que ainda não entrou na feature store não pode ser pontuado até a
+próxima carga.
 
-`mlops.model_registry` guarda qual modelo está em produção, desde quando e com
-que métricas — o suficiente para rastrear uma decisão até o modelo que a tomou.
-O que falta é versionar junto **o recorte de dados** que treinou cada versão
-(MLflow ou equivalente), para responder "sobre qual população este modelo
-aprendeu" sem depender de memória.
+Para resolver, faltaria uma camada que agregue o histórico bruto sob demanda
+nesses casos, mantendo a leitura direta como caminho rápido para quem já existe.
 
-### 5.6. Testes automatizados de dados e de modelo
+### 5.5. Registry guardando também os dados
 
-Existe uma trava de sanidade na ingestão — a DAG recusa publicar uma ABT
-construída sobre amostra, porque isso apagaria o histórico de quem já está no
-banco. É uma trava pontual, não uma suíte.
+`mlops.model_registry` responde qual modelo está no ar, desde quando e com que
+métricas. Dá para rastrear qualquer decisão até o modelo que a tomou.
 
-Faltam contratos de dados (schema, faixas, taxa de nulos por coluna) rodando
-antes da carga, e um teste de modelo que barre a promoção de uma versão com AUC
-abaixo do piso — hoje o piso existe só no monitoramento, depois do fato.
+O que ele não guarda é sobre quais dados cada versão aprendeu. Versionar o
+recorte junto do modelo (com MLflow ou coisa parecida) permitiria responder
+"que população treinou este modelo?" sem depender da memória de alguém.
 
-### 5.7. Validar antes de promover
+### 5.6. Testes de dados e de modelo
 
-Nenhuma versão nova é testada contra a atual antes de assumir. O desenho
-natural aqui é *shadow deployment*: a versão candidata pontua o mesmo tráfego em
-paralelo, sem decidir nada, e as duas séries são comparadas em
-`serving.predictions` — que já guarda a versão do modelo em cada linha, então a
-tabela está pronta para receber isso.
+Existe uma trava na ingestão: a DAG recusa publicar uma ABT construída sobre
+amostra, porque isso apagaria o histórico de quem já está no banco. Ela salvou o
+projeto uma vez. Mas é uma trava específica, não uma suíte de testes.
 
+Faltam duas coisas. Contratos de dados rodando antes da carga — schema, faixas
+esperadas, taxa de nulos por coluna. E um teste que impeça a promoção de um
+modelo com AUC abaixo do piso: hoje esse piso existe só no monitoramento, ou
+seja, depois que o modelo já está decidindo.
+
+### 5.7. Testar a versão nova antes de promover
+
+Nenhuma versão nova é comparada com a atual antes de assumir. O caminho conhecido
+para isso é o *shadow deployment*: a candidata pontua o mesmo tráfego em
+paralelo, sem decidir nada, e as duas séries são comparadas depois.
+
+A parte chata já está pronta, aliás. `serving.predictions` guarda a versão do
+modelo em cada linha, então a tabela aguenta as duas convivendo sem confusão.
