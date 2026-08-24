@@ -2,7 +2,8 @@
 
 Este documento descreve a **arquitetura funcional completa** da solução, do dado
 bruto ao deploy do modelo como serviço de predição, além da estratégia de
-**monitoramento** e das **ações automatizadas** disparadas pelas previsões.
+**monitoramento** (item iii), das **ações automatizadas** disparadas pelas
+previsões (item iv) e dos **próximos passos de desenvolvimento**.
 
 ---
 
@@ -567,3 +568,69 @@ modelo e latência. Governança e auditoria não são um passo futuro: são a ba
 sobre a qual a automação poderia ser ligada com segurança.
 
 ---
+
+## 5. Próximos passos de desenvolvimento
+
+O que ficou de fora e por quê. A ordem é de prioridade, não de esforço.
+
+### 5.1. O motor de ações (item iv)
+
+É o passo mais próximo do negócio e o único descrito em detalhe neste
+documento — a seção 4 inteira existe para isso. Foi deixado como proposta de
+propósito: sem um sistema de originação real para receber a oferta, o motor
+gravaria decisões numa tabela que ninguém consome.
+
+### 5.2. Re-treino disparado pelo monitoramento
+
+Hoje a DAG `credit_risk_training` está **pausada e é manual**, e isso é uma
+escolha: trocar o modelo que decide crédito é decisão de negócio, não de
+agendador. O monitoramento já produz o sinal (`retrain_recommended` em
+`mlops.monitoring_runs`) — falta o elo que transforma esse sinal em uma
+execução com aprovação humana no meio: alerta → revisão → promoção no registry.
+
+### 5.3. Treino reproduzível bit a bit
+
+O pipeline de dados já é determinístico: reconstruir a ABT do zero gera um
+arquivo com o **mesmo SHA-256**. O treino não é — com `n_jobs=-1`, a construção
+paralela dos histogramas desloca o ponto de parada do early stopping, e o
+mesmo comando produz 2.319 ou 2.366 árvores (AUC 0,790922 contra 0,790986).
+
+A diferença é irrelevante para a decisão, mas atrapalha auditoria: não dá para
+provar que o artefato em produção veio exatamente daquele commit. Fixar
+`n_jobs=1` no treino final resolve, ao custo de tempo de máquina.
+
+### 5.4. Features calculadas sob demanda
+
+A API responde em milissegundos porque **lê** as 836 features do banco por
+chave primária — não as recalcula. O limite aparece no cliente que ainda não
+está na feature store: ele não pode ser pontuado até a próxima carga.
+
+O passo seguinte é uma camada que agregue o histórico bruto sob demanda para
+esses casos, mantendo a leitura direta como caminho rápido para quem já existe.
+
+### 5.5. Registry com métricas e dados versionados
+
+`mlops.model_registry` guarda qual modelo está em produção, desde quando e com
+que métricas — o suficiente para rastrear uma decisão até o modelo que a tomou.
+O que falta é versionar junto **o recorte de dados** que treinou cada versão
+(MLflow ou equivalente), para responder "sobre qual população este modelo
+aprendeu" sem depender de memória.
+
+### 5.6. Testes automatizados de dados e de modelo
+
+Existe uma trava de sanidade na ingestão — a DAG recusa publicar uma ABT
+construída sobre amostra, porque isso apagaria o histórico de quem já está no
+banco. É uma trava pontual, não uma suíte.
+
+Faltam contratos de dados (schema, faixas, taxa de nulos por coluna) rodando
+antes da carga, e um teste de modelo que barre a promoção de uma versão com AUC
+abaixo do piso — hoje o piso existe só no monitoramento, depois do fato.
+
+### 5.7. Validar antes de promover
+
+Nenhuma versão nova é testada contra a atual antes de assumir. O desenho
+natural aqui é *shadow deployment*: a versão candidata pontua o mesmo tráfego em
+paralelo, sem decidir nada, e as duas séries são comparadas em
+`serving.predictions` — que já guarda a versão do modelo em cada linha, então a
+tabela está pronta para receber isso.
+
