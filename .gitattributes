@@ -1,0 +1,5 @@
+# Scripts e arquivos executados dentro de containers Linux precisam de LF.
+# Com CRLF o shell do container quebra ao interpretar o retorno de carro.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
