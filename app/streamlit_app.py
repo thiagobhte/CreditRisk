@@ -273,16 +273,25 @@ with st.sidebar:
         chave = f"EXT_SOURCE_{i}"
         atual = atuais.get(chave)
 
+        # A chave inclui o client_id de proposito. No Streamlit, um widget com
+        # `key` fixa le o valor da sessao e IGNORA o argumento `value` — ao
+        # trocar de cliente o slider ficava preso no score do cliente anterior
+        # e era enviado como se fosse uma simulacao pedida pelo analista.
         if atual is None:
             simular = st.checkbox(f"EXT_SOURCE_{i} — ausente neste cliente. Simular um valor?",
-                                  value=False, key=f"sim_{chave}")
+                                  value=False, key=f"sim_{chave}_{client_id}")
             if simular:
                 overrides[chave] = st.slider(f"EXT_SOURCE_{i} (score externo)",
-                                             0.0, 1.0, 0.5, 0.01, key=f"sld_{chave}")
+                                             0.0, 1.0, 0.5, 0.01,
+                                             key=f"sld_{chave}_{client_id}")
         else:
             novo = st.slider(f"EXT_SOURCE_{i} (score externo)",
-                             0.0, 1.0, float(atual), 0.01, key=f"sld_{chave}")
-            if abs(novo - float(atual)) > 1e-9:
+                             0.0, 1.0, float(atual), 0.01,
+                             key=f"sld_{chave}_{client_id}")
+            # Meio passo de tolerancia: o slider anda de 0,01 em 0,01, entao
+            # so uma mexida real do analista passa daqui. Sem isso, um valor
+            # do banco fora da grade (0,5604) viraria "alteracao" sozinho.
+            if abs(novo - float(atual)) > 0.005:
                 overrides[chave] = novo
 
     if overrides:
