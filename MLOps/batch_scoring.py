@@ -16,7 +16,7 @@ conseguir separar depois de onde veio cada decisão.
 
 Uso:
     python -m MLOps.batch_scoring --limite 5000
-    python -m MLOps.batch_scoring --limite 5000 --somente-novos
+    python -m MLOps.batch_scoring --limite 5000 --incluir-historicos   # so para teste
 """
 
 import argparse
@@ -42,9 +42,25 @@ def _clientes(limite: int, somente_novos: bool) -> pd.DataFrame:
     """
     Seleciona os clientes a pontuar.
 
-    `somente_novos` pega quem ainda não tem desfecho conhecido — que é a
-    situação real de uma fila de propostas: o cliente pediu crédito e ninguém
-    sabe ainda se ele vai pagar.
+    `somente_novos` (o PADRÃO) pega quem ainda não tem desfecho conhecido — que
+    é a situação real de uma fila de propostas: o cliente pediu crédito e
+    ninguém sabe ainda se ele vai pagar.
+
+    POR QUE ISSO É O PADRÃO, E NÃO UMA OPÇÃO:
+
+        Pontuar de novo um cliente que estava no TREINO, usando o modelo final,
+        produz uma PD que já viu o desfecho daquele cliente. Gravar isso em
+        `serving.predictions` envenena a camada de performance, que mede AUC
+        justamente sobre quem tem desfecho conhecido.
+
+        Não é teoria. Uma execução com `--incluir-historicos` gravou 5.000
+        decisões, 4.276 delas sobre clientes de treino: o AUC da safra 2026-08
+        saltou de 0,7126 para 0,8284 e o alerta de degradação — que era
+        legítimo — desapareceu.
+
+        Com o padrão em `somente_novos`, essas linhas nunca existem: o cliente
+        sem desfecho não entra no cálculo de AUC, porque não há o que comparar.
+        A proteção é estrutural, não um filtro que alguém pode esquecer.
     """
     filtro = "WHERE target IS NULL" if somente_novos else ""
     consulta = text(f"""
@@ -141,10 +157,14 @@ def _run_cli() -> int:
     parser = argparse.ArgumentParser(description="Pontua a carteira em lote")
     parser.add_argument("--limite", type=int, default=5000,
                         help="quantos clientes pontuar (padrao: 5000)")
-    parser.add_argument("--somente-novos", action="store_true",
-                        help="so clientes sem desfecho conhecido (fila de propostas)")
+    # O padrao pontua so quem NAO tem desfecho conhecido. Repontuar cliente de
+    # treino com o modelo final vaza o desfecho para dentro da metrica — ver a
+    # explicacao em _clientes().
+    parser.add_argument("--incluir-historicos", action="store_true",
+                        help="tambem pontua clientes com desfecho conhecido "
+                             "(VAZA para a camada de performance — so para teste)")
     args = parser.parse_args()
-    run(limite=args.limite, somente_novos=args.somente_novos)
+    run(limite=args.limite, somente_novos=not args.incluir_historicos)
     return 0
 
 
