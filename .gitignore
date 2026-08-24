@@ -18,8 +18,10 @@ venv/
 /mnt
 
 # ===== Saídas geradas na raiz =====
-/feature_importance.csv
-/feature_importance_baseline.csv
+# As importancias moram em Model/artifacts/ e SAO versionadas, junto do
+# .joblib que elas descrevem: o monitoring.py le esse CSV para saber quais
+# variaveis acompanhar, entao um clone sem ele monitora 8 em vez de 30.
+# (as duas linhas abaixo cobriam o caminho antigo, na raiz)
 /submission_baseline.csv
 /*.csv
 drift_report.json

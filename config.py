@@ -171,9 +171,22 @@ OOF_PREDICTIONS_PATH             = os.path.join(DATA_DIR, "oof_predictions.csv")
 # 500 MB e travaria o app). Gerada pelo train.py.
 DEMO_CLIENTS_PATH                = os.path.join(DATA_DIR, "demo_clients.csv")
 
-FEATURE_IMPORTANCE_PATH          = os.path.join(PROJECT_ROOT, "feature_importance.csv")
-FEATURE_IMPORTANCE_BASELINE_PATH = os.path.join(PROJECT_ROOT, "feature_importance_baseline.csv")
-FEATURE_IMPORTANCE_PLOT_PATH     = os.path.join(PROJECT_ROOT, "Model", "lgbm_importances.png")
+# Importâncias e gráfico ficam em MODEL_DIR, junto do modelo — não na raiz.
+#
+# POR QUE ISSO IMPORTA, E NÃO É ARRUMAÇÃO:
+#
+#   1. Estes arquivos DESCREVEM UM MODELO. Fora do MODEL_DIR, nada impede que o
+#      lgbm_model.joblib de uma data conviva com as importâncias de outra — foi
+#      o que aconteceu aqui: modelo de 13/07 ao lado de um CSV de 27/07, e o
+#      gráfico de drivers da apresentação saiu de um treino que o código já não
+#      reproduzia.
+#
+#   2. Caminho fixo impede execução isolada. Redirecionar MODEL_DIR (como as
+#      DAGs fazem para /demo) deixava estes três de fora, e um treino de teste
+#      sobrescrevia os artefatos de produção mesmo assim.
+FEATURE_IMPORTANCE_PATH          = os.path.join(MODEL_DIR, "feature_importance.csv")
+FEATURE_IMPORTANCE_BASELINE_PATH = os.path.join(MODEL_DIR, "feature_importance_baseline.csv")
+FEATURE_IMPORTANCE_PLOT_PATH     = os.path.join(MODEL_DIR, "lgbm_importances.png")
 
 # ============================================================
 # POLÍTICA DE DECISÃO DE CRÉDITO

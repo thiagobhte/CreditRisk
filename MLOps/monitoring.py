@@ -173,6 +173,15 @@ def features_monitoradas(top_n: int = None) -> list:
               "DAYS_BIRTH", "AMT_CREDIT", "AMT_INCOME_TOTAL", "AMT_ANNUITY"]
 
     if not os.path.exists(FEATURE_IMPORTANCE_PATH):
+        # O fallback mantém o monitoramento vivo, mas ele passa a olhar 8
+        # variáveis em vez de 30 — e um "1 de 8" parece com um "1 de 30" para
+        # quem lê rápido. Cair de pé em silêncio aqui seria pior que falhar:
+        # o relatório continuaria saindo, com metade do alcance.
+        print(f"[AVISO] {FEATURE_IMPORTANCE_PATH} nao encontrado.\n"
+              f"        Monitorando apenas {len(padrao)} variaveis de reserva, "
+              f"e nao as {top_n} mais importantes.\n"
+              f"        Gere o arquivo com: python -m Model.train",
+              file=sys.stderr)
         return padrao
 
     fi = pd.read_csv(FEATURE_IMPORTANCE_PATH)
