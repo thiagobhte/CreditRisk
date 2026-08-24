@@ -31,9 +31,17 @@ PROJETO = "/project"
 # Ambiente de PRODUÇÃO: dados e modelo reais.
 #   /data              → bind-mount de ./Dados (somente leitura)
 #   Model/artifacts    → o modelo treinado na base completa (AUC 0,7909)
+#   NUM_ROWS vazio     → base inteira, sem recorte
+#
+# LIMPAR `NUM_ROWS` É OBRIGATÓRIO, NÃO COSMÉTICO.
+#   `append_env=True` herda o ambiente do container, que roda em modo demo com
+#   NUM_ROWS=30000. Sem apagá-la aqui, uma task de produção continuaria em modo
+#   amostra: a carga era recusada pela trava do load_to_db e a DAG falhava todo
+#   dia às 00h. `config.py` trata string vazia como ausente.
 AMBIENTE_PRODUCAO = {
     "DATA_DIR":  "/data",
     "MODEL_DIR": f"{PROJETO}/Model/artifacts",
+    "NUM_ROWS":  "",
 }
 
 DEFAULT_ARGS = {
