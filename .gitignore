@@ -26,9 +26,6 @@ venv/
 /*.csv
 drift_report.json
 
-# ===== Configuracoes locais do editor (nao compartilhar) =====
-.claude/settings.local.json
-
 # ===== Documentos auxiliares de trabalho (não fazem parte da entrega) =====
 # Guias internos de apoio — checklist, passo a passo, contexto e handoff.
 # Ficam locais, não vão para o repositório.
