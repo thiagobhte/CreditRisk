@@ -75,6 +75,17 @@ QUEDA_TOLERADA = 0.05
 # Safras menores que isso têm AUC instável demais para acionar um alerta.
 TAMANHO_MINIMO_SAFRA = 300
 
+# Origens que contam como DECISÃO DE PRODUÇÃO ao medir performance.
+#
+# `serving.predictions` guarda tudo — inclusive as chamadas avulsas que alguém
+# faz no Swagger para testar. Medir AUC de safra sobre esse conjunto misturaria
+# teste com operação: 68 chamadas manuais bastaram para mover o AUC da safra
+# 2026-08 de 0,713 para 0,757 e apagar um alerta legítimo.
+#
+# O drift de predição usa o mesmo filtro, pela mesma razão: a distribuição de
+# PD que interessa é a das decisões reais.
+FONTES_DE_PRODUCAO = ("batch",)
+
 
 # ============================================================
 # POPULATION STABILITY INDEX
@@ -169,20 +180,30 @@ def features_monitoradas(top_n: int = None) -> list:
     return media.head(top_n).index.tolist()
 
 
-def _total_estimado() -> int:
-    """
-    Estimativa rápida de quantos clientes há na feature store.
+def _filtro_de_populacao(apenas_treino) -> str:
+    """Condição SQL que separa quem tem desfecho conhecido de quem não tem."""
+    if apenas_treino is True:
+        return "a.target IS NOT NULL"
+    if apenas_treino is False:
+        return "a.target IS NULL"
+    return "TRUE"
 
-    Usa `reltuples` do catálogo (mantido pelo autovacuum) em vez de COUNT(*):
-    contar 356 mil linhas de uma tabela de 3 GB é uma varredura completa, e aqui
-    só precisamos da ordem de grandeza para dimensionar a amostra.
+
+def _total_do_subconjunto(apenas_treino) -> int:
     """
-    consulta = text("""
-        SELECT GREATEST(reltuples::bigint, 1)
-        FROM pg_class WHERE oid = 'feature_store.abt'::regclass
-    """)
+    Quantos clientes existem no subconjunto que vamos amostrar.
+
+    É um COUNT(*) exato, e não a estimativa do `reltuples`, porque o passo da
+    amostragem sai daqui: se o total oscilar, o passo oscila e a amostra deixa
+    de ser reprodutível. Custa ~0,04 s — `target` é coluna inline, então a
+    varredura não precisa abrir o JSONB de ninguém.
+    """
+    consulta = text(
+        f"SELECT count(*) FROM feature_store.abt AS a "
+        f"WHERE {_filtro_de_populacao(apenas_treino)}"
+    )
     with get_engine().connect() as conn:
-        return int(conn.execute(consulta).scalar_one())
+        return max(1, int(conn.execute(consulta).scalar_one()))
 
 
 def carregar_populacao(features: list, amostra: int = 20000,
@@ -195,11 +216,29 @@ def carregar_populacao(features: list, amostra: int = 20000,
     1. Extrai os valores de dentro do JSONB direto no SQL (`jsonb_num`), em vez
        de trazer as 836 features de cada cliente para o Python e descartar 800.
 
-    2. Usa TABLESAMPLE, e não `ORDER BY random()`. Ordenar aleatoriamente exige
-       ler e ordenar as 356 mil linhas inteiras — a primeira versão deste código
-       fazia isso e levava minutos. O TABLESAMPLE sorteia BLOCOS de disco: lê só
-       a fração necessária. `REPEATABLE` fixa a semente, então a mesma chamada
-       devolve a mesma amostra e a demonstração é reprodutível.
+    2. Amostra por ARITMÉTICA NA CHAVE PRIMÁRIA (`mod(sk_id_curr, passo)`), e
+       não por sorteio.
+
+    POR QUE NÃO `TABLESAMPLE`, QUE ERA O QUE ESTAVA AQUI:
+
+        `TABLESAMPLE SYSTEM (x) REPEATABLE (semente)` sorteia BLOCOS DE DISCO.
+        A semente fixa garante os mesmos blocos — não os mesmos clientes. No
+        PostgreSQL todo UPDATE grava uma nova versão da linha em outro bloco,
+        então recarregar a feature store embaralha quem está onde.
+
+        Isso não é hipótese: depois de uma recarga completa (421.906 linhas
+        reescritas), o PSI do PAYMENT_RATE saiu de 1,51 para 1,44 sem que dado
+        nenhum tivesse mudado. O sinal aguentou, mas um número que se mexe
+        sozinho é indefensável numa apresentação.
+
+        O `mod` na chave primária não depende de layout físico: o cliente
+        100002 cai na mesma amostra hoje, depois de um VACUUM FULL e depois de
+        restaurar um backup. E ainda saiu mais rápido — 0,9 s contra 26 s —
+        porque o filtro é numa coluna inline e só as linhas escolhidas
+        precisam abrir o JSONB.
+
+    O `ORDER BY` também é obrigatório: sem ele o `LIMIT` devolve as primeiras
+    linhas que a varredura encontrar, que de novo depende do disco.
     """
     # jsonb_to_record desserializa o JSONB UMA vez por linha e projeta as chaves
     # pedidas. A alternativa (`features->>'X'` repetido 30 vezes) reabre o
@@ -210,27 +249,32 @@ def carregar_populacao(features: list, amostra: int = 20000,
     # A conversão fica no pandas, com errors="coerce" (inválido vira NaN).
     definicao = ", ".join(f'"{f}" text' for f in features)
 
-    filtro = ""
-    if apenas_treino is True:
-        filtro = "WHERE a.target IS NOT NULL"
-    elif apenas_treino is False:
-        filtro = "WHERE a.target IS NULL"
+    # Passo da amostragem sistemática: pega 1 cliente a cada `passo`. O teto
+    # (e não o arredondamento) garante que o rendimento fique abaixo de
+    # `amostra`, para o LIMIT não precisar cortar — cortar enviesaria a amostra
+    # para os IDs mais baixos, já que a consulta sai ordenada por ID.
+    total = _total_do_subconjunto(apenas_treino)
+    passo = max(1, -(-total // amostra))          # ceil(total / amostra)
 
-    # Margem de 3x: o TABLESAMPLE é aproximado e o filtro de target descarta
-    # parte do que veio. Melhor sortear a mais e cortar com LIMIT do que voltar
-    # ao banco por ter trazido pouco.
-    percentual = min(100.0, max(0.5, (amostra / _total_estimado()) * 100 * 3))
+    # A semente escolhe QUAL das `passo` fatias levar. Duas sementes diferentes
+    # devolvem amostras disjuntas do mesmo universo — que é o que o cenário de
+    # choque precisa: comparar treino contra treino, sem repetir cliente.
+    resto = semente % passo
 
     consulta = text(f"""
         SELECT x.*
-        FROM feature_store.abt AS a
-             TABLESAMPLE SYSTEM ({percentual}) REPEATABLE ({semente}),
+        FROM feature_store.abt AS a,
              LATERAL jsonb_to_record(a.features) AS x({definicao})
-        {filtro}
+        WHERE mod(a.sk_id_curr, :passo) = :resto
+          AND {_filtro_de_populacao(apenas_treino)}
+        ORDER BY a.sk_id_curr
         LIMIT :limite
     """)
     with get_engine().connect() as conn:
-        dados = pd.DataFrame(conn.execute(consulta, {"limite": amostra}).mappings())
+        dados = pd.DataFrame(conn.execute(
+            consulta,
+            {"passo": passo, "resto": resto, "limite": amostra},
+        ).mappings())
 
     # Converte para número; o que não for numérico ("NaN", "Infinity") vira NaN,
     # que é exatamente como o PSI e o modelo tratam ausência.
@@ -448,9 +492,13 @@ def rodar_prediction_drift(janela_dias: int = 30) -> dict:
         SELECT probability_default::float8 AS pd, decision
         FROM serving.predictions
         WHERE created_at >= now() - make_interval(days => :dias)
+          AND source = ANY(:fontes)
     """)
     with get_engine().connect() as conn:
-        producao = pd.DataFrame(conn.execute(consulta, {"dias": janela_dias}).mappings())
+        producao = pd.DataFrame(conn.execute(
+            consulta,
+            {"dias": janela_dias, "fontes": list(FONTES_DE_PRODUCAO)},
+        ).mappings())
 
     if producao.empty:
         return {"erro": f"nenhuma predicao registrada nos ultimos {janela_dias} dias. "
@@ -507,9 +555,12 @@ def rodar_performance() -> dict:
         FROM serving.predictions p
         JOIN feature_store.abt a ON a.sk_id_curr = p.sk_id_curr
         WHERE a.target IS NOT NULL
+          AND p.source = ANY(:fontes)
+        ORDER BY p.sk_id_curr, p.created_at
     """)
     with get_engine().connect() as conn:
-        dados = pd.DataFrame(conn.execute(consulta).mappings())
+        dados = pd.DataFrame(conn.execute(
+            consulta, {"fontes": list(FONTES_DE_PRODUCAO)}).mappings())
 
     if dados.empty:
         return {"erro": "nenhuma predicao com desfecho conhecido. "
